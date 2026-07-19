@@ -14,10 +14,56 @@ class ProjectController extends ChangeNotifier {
 
   List<TimelineTrack> get tracks => _project.tracks;
 
+  // ===========================
+  // Selection
+  // ===========================
+
+  String? _selectedTrackId;
+  String? _selectedClipId;
+
+  String? get selectedTrackId => _selectedTrackId;
+  String? get selectedClipId => _selectedClipId;
+
+  bool isClipSelected(String clipId) {
+    return _selectedClipId == clipId;
+  }
+
+  bool isTrackSelected(String trackId) {
+    return _selectedTrackId == trackId;
+  }
+
+  void selectTrack(String? trackId) {
+    _selectedTrackId = trackId;
+    notifyListeners();
+  }
+
+  void selectClip({
+    required String trackId,
+    required String clipId,
+  }) {
+    _selectedTrackId = trackId;
+    _selectedClipId = clipId;
+    notifyListeners();
+  }
+
+  void clearSelection() {
+    _selectedTrackId = null;
+    _selectedClipId = null;
+    notifyListeners();
+  }
+
+  // ===========================
+  // Project
+  // ===========================
+
   void updateProject(EditorProject project) {
     _project = project;
     notifyListeners();
   }
+
+  // ===========================
+  // Track
+  // ===========================
 
   void addTrack(TimelineTrack track) {
     updateProject(
@@ -35,7 +81,15 @@ class ProjectController extends ChangeNotifier {
             .toList(),
       ),
     );
+
+    if (_selectedTrackId == trackId) {
+      clearSelection();
+    }
   }
+
+  // ===========================
+  // Clip
+  // ===========================
 
   void addClip({
     required String trackId,
@@ -75,6 +129,10 @@ class ProjectController extends ChangeNotifier {
         tracks: updated,
       ),
     );
+
+    if (_selectedClipId == clipId) {
+      clearSelection();
+    }
   }
 
   void updateClip({
