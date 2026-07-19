@@ -1,4 +1,5 @@
 import 'package:digitor/core/services/media_picker_service.dart';
+import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/presentation/editor_page.dart';
 import 'package:digitor/features/home/presentation/widgets/home_action_card.dart';
 import 'package:flutter/material.dart';
@@ -105,8 +106,13 @@ class HomePage extends StatelessWidget {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => EditorPage(
-          selectedFile: selectedFile,
-          isVideo: isVideo,
+          media: MediaItem(
+            id: selectedFile.path,
+            path: selectedFile.path,
+            isVideo: isVideo,
+            duration: Duration.zero,
+            createdAt: DateTime.now(),
+          ),
         ),
       ),
     );

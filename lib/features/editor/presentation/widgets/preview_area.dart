@@ -1,17 +1,15 @@
 import 'dart:io';
 
+import 'package:digitor/features/editor/domain/models/editor_session.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 class PreviewArea extends StatelessWidget {
   const PreviewArea({
-    required this.selectedFile,
-    required this.isVideo,
+    required this.session,
     super.key,
   });
 
-  final XFile selectedFile;
-  final bool isVideo;
+  final EditorSession session;
 
   @override
   Widget build(BuildContext context) {
@@ -26,23 +24,23 @@ class PreviewArea extends StatelessWidget {
           border: Border.all(color: colorScheme.outlineVariant),
           borderRadius: BorderRadius.circular(28),
         ),
-        child: isVideo
+        child: session.media.isVideo
             ? const _VideoPreviewPlaceholder()
-            : _ImagePreview(file: selectedFile),
+            : _ImagePreview(path: session.media.path),
       ),
     );
   }
 }
 
 class _ImagePreview extends StatelessWidget {
-  const _ImagePreview({required this.file});
+  const _ImagePreview({required this.path});
 
-  final XFile file;
+  final String path;
 
   @override
   Widget build(BuildContext context) {
     return Image.file(
-      File(file.path),
+      File(path),
       fit: BoxFit.contain,
       errorBuilder: (context, error, stackTrace) {
         final theme = Theme.of(context);
@@ -50,7 +48,7 @@ class _ImagePreview extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              file.name,
+              path.split(Platform.pathSeparator).last,
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyLarge,
             ),
