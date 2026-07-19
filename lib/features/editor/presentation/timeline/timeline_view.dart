@@ -16,68 +16,89 @@ class TimelineView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final project = controller.project;
-
-    final timelineWidth =
-        project.duration.inMilliseconds /
-        1000 *
-        TimelineConstants.pixelsPerSecond;
-
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
+        final project = controller.project;
+
+        final timelineWidth =
+            project.duration.inMilliseconds /
+            1000 *
+            TimelineConstants.pixelsPerSecond;
+
         return Column(
           children: [
-            // Time ruler
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: timelineWidth,
-                child: TimeRuler(
-                  duration: project.duration,
-                ),
-              ),
-            ),
-
-            const Divider(height: 1),
-
-            // Tracks
             Expanded(
-              child: ListView.builder(
-                itemCount: project.tracks.length,
-                itemBuilder: (context, index) {
-                  final track = project.tracks[index];
-
-                  return SizedBox(
-                    height: TimelineConstants.trackHeight,
-                    child: Row(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.stretch,
-                      children: [
-                        TrackHeader(
-                          track: track,
-                        ),
-
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection:
-                                Axis.horizontal,
-                            child: SizedBox(
-                              width: timelineWidth,
-                              child: TrackRow(
-                                track: track,
-                                timelineWidth:
-                                    timelineWidth,
-                                controller:
-                                    controller,
-                              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width:
+                      TimelineConstants.headerWidth +
+                      timelineWidth,
+                  child: Column(
+                    children: [
+                      // =========================
+                      // Time Ruler
+                      // =========================
+                      Row(
+                        children: [
+                          SizedBox(
+                            width:
+                                TimelineConstants.headerWidth,
+                            height:
+                                TimelineConstants.rulerHeight,
+                          ),
+                          SizedBox(
+                            width: timelineWidth,
+                            child: TimeRuler(
+                              duration: project.duration,
                             ),
                           ),
+                        ],
+                      ),
+
+                      const Divider(height: 1),
+
+                      // =========================
+                      // Tracks
+                      // =========================
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: project.tracks.length,
+                          itemBuilder: (context, index) {
+                            final track =
+                                project.tracks[index];
+
+                            return SizedBox(
+                              height:
+                                  TimelineConstants.trackHeight,
+                              child: Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment
+                                        .stretch,
+                                children: [
+                                  TrackHeader(
+                                    track: track,
+                                  ),
+                                  SizedBox(
+                                    width: timelineWidth,
+                                    child: TrackRow(
+                                      track: track,
+                                      timelineWidth:
+                                          timelineWidth,
+                                      controller:
+                                          controller,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
-                      ],
-                    ),
-                  );
-                },
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
