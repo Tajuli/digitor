@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:digitor/features/editor/application/editor_controller.dart';
 import 'package:digitor/features/editor/application/timeline_provider.dart';
 import 'package:digitor/features/editor/application/video_thumbnail_generator.dart';
