@@ -11,12 +11,13 @@ class TimelineProvider extends ChangeNotifier {
 
   final ThumbnailGenerator _generator;
 
-  List<ThumbnailFrame> _thumbnails = [];
+  List<ThumbnailFrame> _frames = [];
+
   bool _isLoading = false;
+
   String? _error;
 
-  List<ThumbnailFrame> get thumbnails =>
-      List.unmodifiable(_thumbnails);
+  List<ThumbnailFrame> get frames => List.unmodifiable(_frames);
 
   bool get isLoading => _isLoading;
 
@@ -28,24 +29,25 @@ class TimelineProvider extends ChangeNotifier {
   }) async {
     _isLoading = true;
     _error = null;
+
     notifyListeners();
 
     try {
-      _thumbnails = await _generator.generate(
+      _frames = await _generator.generate(
         video: video,
         duration: duration,
       );
     } catch (e) {
+      _frames = [];
       _error = e.toString();
-      _thumbnails = [];
-    } finally {
-      _isLoading = false;
-      notifyListeners();
     }
+
+    _isLoading = false;
+    notifyListeners();
   }
 
   void clear() {
-    _thumbnails = [];
+    _frames = [];
     _error = null;
     _isLoading = false;
     notifyListeners();
