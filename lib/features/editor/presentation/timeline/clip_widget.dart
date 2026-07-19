@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../application/project_controller.dart';
 import '../../domain/models/audio_clip.dart';
 import '../../domain/models/image_clip.dart';
 import '../../domain/models/overlay_clip.dart';
@@ -12,9 +13,13 @@ class ClipWidget extends StatelessWidget {
   const ClipWidget({
     super.key,
     required this.clip,
+    required this.controller,
+    required this.trackId,
   });
 
   final TimelineClip clip;
+  final ProjectController controller;
+  final String trackId;
 
   Color _color() {
     if (clip is VideoClip) return Colors.blue;
@@ -31,7 +36,7 @@ class ClipWidget extends StatelessWidget {
     if (clip is TextClip) return "TEXT";
     if (clip is OverlayClip) return "OVERLAY";
     if (clip is AudioClip) return "AUDIO";
-    return "";
+    return "CLIP";
   }
 
   @override
@@ -44,20 +49,52 @@ class ClipWidget extends StatelessWidget {
         1000 *
         TimelineConstants.pixelsPerSecond;
 
+    final selected = controller.isClipSelected(clip.id);
+
     return Positioned(
       left: left,
-      child: Container(
-        width: width,
-        height: 56,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: _color(),
-          borderRadius:
-              BorderRadius.circular(TimelineConstants.clipRadius),
-        ),
-        child: Text(
-          _title(),
-          style: const TextStyle(color: Colors.white),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          controller.selectClip(
+            trackId: trackId,
+            clipId: clip.id,
+          );
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: width,
+          height: 56,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: _color(),
+            borderRadius: BorderRadius.circular(
+              TimelineConstants.clipRadius,
+            ),
+            border: Border.all(
+              color: selected
+                  ? Colors.yellow
+                  : Colors.transparent,
+              width: 3,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: Colors.yellow.withOpacity(.35),
+                      blurRadius: 10,
+                    )
+                  ]
+                : null,
+          ),
+          child: Text(
+            _title(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
       ),
     );
