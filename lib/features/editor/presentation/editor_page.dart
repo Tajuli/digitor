@@ -1,4 +1,6 @@
 import 'package:digitor/features/editor/application/editor_controller.dart';
+import 'package:digitor/features/editor/application/timeline_provider.dart';
+import 'package:digitor/features/editor/application/video_thumbnail_generator.dart';
 import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/widgets/preview_area.dart';
@@ -19,11 +21,28 @@ class EditorPage extends StatefulWidget {
 
 class _EditorPageState extends State<EditorPage> {
   late final EditorController _controller;
+  late final TimelineProvider _timelineProvider;
 
   @override
   void initState() {
     super.initState();
+
     _controller = EditorController()..loadMedia(widget.media);
+
+    _timelineProvider = TimelineProvider(
+      generator: VideoThumbnailGenerator(),
+    );
+
+    _loadTimeline();
+  }
+
+  Future<void> _loadTimeline() async {
+    if (!widget.media.isVideo) return;
+
+    await _timelineProvider.loadVideo(
+      video: File(widget.media.path),
+      duration: widget.media.duration,
+    );
   }
 
   @override
@@ -32,11 +51,13 @@ class _EditorPageState extends State<EditorPage> {
 
     if (oldWidget.media != widget.media) {
       _controller.loadMedia(widget.media);
+      _loadTimeline();
     }
   }
 
   @override
   void dispose() {
+    _timelineProvider.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -49,14 +70,8 @@ class _EditorPageState extends State<EditorPage> {
       body: SafeArea(
         child: Column(
           children: [
-            /// ===========================
-            /// App Bar
-            /// ===========================
             Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 8,
-                vertical: 8,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
                 children: [
                   IconButton(
@@ -79,10 +94,6 @@ class _EditorPageState extends State<EditorPage> {
                 ],
               ),
             ),
-
-            /// ===========================
-            /// Body
-            /// ===========================
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -98,12 +109,9 @@ class _EditorPageState extends State<EditorPage> {
                     ),
                     child: Center(
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxWidth: 900,
-                        ),
+                        constraints: const BoxConstraints(maxWidth: 900),
                         child: Column(
                           children: [
-                            /// Preview
                             Expanded(
                               flex: 5,
                               child: ListenableBuilder(
@@ -117,32 +125,30 @@ class _EditorPageState extends State<EditorPage> {
                                     );
                                   }
 
-                                  return PreviewArea(
-                                    session: session,
-                                  );
+                                  return PreviewArea(session: session);
                                 },
                               ),
                             ),
-
                             const SizedBox(height: 16),
-
-                            /// Timeline
                             ListenableBuilder(
-                              listenable: _controller,
+                              listenable: Listenable.merge([
+                                _controller,
+                                _timelineProvider,
+                              ]),
                               builder: (context, _) {
                                 final session = _controller.session;
 
+                                if (session == null) {
+                                  return const SizedBox.shrink();
+                                }
+
                                 return TimelineWidget(
-                                  duration:
-                                      session?.trimEnd ??
-                                      const Duration(minutes: 1),
+                                  duration: session.trimEnd,
+                                  frames: _timelineProvider.frames,
                                 );
                               },
                             ),
-
                             const SizedBox(height: 16),
-
-                            /// Toolbar
                             const EditorToolbar(),
                           ],
                         ),
