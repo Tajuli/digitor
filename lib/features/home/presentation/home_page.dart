@@ -1,8 +1,12 @@
+import 'package:digitor/core/services/media_picker_service.dart';
+import 'package:digitor/features/editor/presentation/editor_page.dart';
 import 'package:digitor/features/home/presentation/widgets/home_action_card.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
+
+  static final MediaPickerService _mediaPickerService = MediaPickerService();
 
   static const List<_HomeAction> _actions = [
     _HomeAction(
@@ -54,7 +58,7 @@ class HomePage extends StatelessWidget {
                           title: action.title,
                           subtitle: action.subtitle,
                           icon: action.icon,
-                          onTap: () => _handleActionTap(action.type),
+                          onTap: () => _handleActionTap(context, action.type),
                         ),
                         if (action != _actions.last) const SizedBox(height: 18),
                       ],
@@ -69,18 +73,43 @@ class HomePage extends StatelessWidget {
     );
   }
 
-  void _handleActionTap(_HomeActionType type) {
+  Future<void> _handleActionTap(
+    BuildContext context,
+    _HomeActionType type,
+  ) async {
     switch (type) {
       case _HomeActionType.videoEditor:
-        // TODO: Open the Video Picker.
+        await _pickAndOpenEditor(context, isVideo: true);
         break;
       case _HomeActionType.imageEditor:
-        // TODO: Open the Image Picker.
+        await _pickAndOpenEditor(context, isVideo: false);
         break;
       case _HomeActionType.shareDigitor:
-        // TODO: Integrate Share Plus with the Play Store link.
+        // TODO: Integrate sharing for Digitor.
         break;
     }
+  }
+
+  Future<void> _pickAndOpenEditor(
+    BuildContext context, {
+    required bool isVideo,
+  }) async {
+    final selectedFile = isVideo
+        ? await _mediaPickerService.pickVideo()
+        : await _mediaPickerService.pickImage();
+
+    if (selectedFile == null || !context.mounted) {
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => EditorPage(
+          selectedFile: selectedFile,
+          isVideo: isVideo,
+        ),
+      ),
+    );
   }
 }
 
