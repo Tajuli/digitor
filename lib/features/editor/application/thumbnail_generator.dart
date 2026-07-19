@@ -1,27 +1,47 @@
 import 'dart:io';
 
-/// Represents a generated thumbnail.
-class ThumbnailFrame {
-  const ThumbnailFrame({
-    required this.file,
-    required this.position,
-  });
+import 'package:path_provider/path_provider.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
-  /// Generated thumbnail image.
-  final File file;
+import 'thumbnail_generator.dart';
 
-  /// Position in the source video.
-  final Duration position;
-}
-
-/// Base contract for thumbnail generation.
-///
-/// Later this can be replaced by FFmpeg or video_thumbnail
-/// without changing the UI.
-abstract class ThumbnailGenerator {
+class VideoThumbnailGenerator implements ThumbnailGenerator {
+  @override
   Future<List<ThumbnailFrame>> generate({
     required File video,
     required Duration duration,
     Duration interval = const Duration(seconds: 1),
-  });
+  }) async {
+    final List<ThumbnailFrame> frames = [];
+
+    final tempDir = await getTemporaryDirectory();
+
+    for (
+      Duration position = Duration.zero;
+      position <= duration;
+      position += interval
+    ) {
+      final String? thumbnailPath = await VideoThumbnail.thumbnailFile(
+        video: video.path,
+        thumbnailPath: tempDir.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 220,
+        quality: 80,
+        timeMs: position.inMilliseconds,
+      );
+
+      if (thumbnailPath == null) {
+        continue;
+      }
+
+      frames.add(
+        ThumbnailFrame(
+          file: File(thumbnailPath),
+          position: position,
+        ),
+      );
+    }
+
+    return frames;
+  }
 }
