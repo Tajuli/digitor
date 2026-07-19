@@ -2,13 +2,13 @@ import 'package:digitor/features/editor/application/editor_controller.dart';
 import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/widgets/preview_area.dart';
-import 'package:digitor/features/editor/presentation/widgets/timeline_placeholder.dart';
+import 'package:digitor/features/editor/presentation/widgets/timeline_widget.dart';
 import 'package:flutter/material.dart';
 
 class EditorPage extends StatefulWidget {
   const EditorPage({
-    required this.media,
     super.key,
+    required this.media,
   });
 
   final MediaItem media;
@@ -29,6 +29,7 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void didUpdateWidget(covariant EditorPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+
     if (oldWidget.media != widget.media) {
       _controller.loadMedia(widget.media);
     }
@@ -48,8 +49,14 @@ class _EditorPageState extends State<EditorPage> {
       body: SafeArea(
         child: Column(
           children: [
+            /// ===========================
+            /// App Bar
+            /// ===========================
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 8,
+              ),
               child: Row(
                 children: [
                   IconButton(
@@ -72,12 +79,15 @@ class _EditorPageState extends State<EditorPage> {
                 ],
               ),
             ),
+
+            /// ===========================
+            /// Body
+            /// ===========================
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final horizontalPadding = constraints.maxWidth >= 700
-                      ? 32.0
-                      : 16.0;
+                  final horizontalPadding =
+                      constraints.maxWidth >= 700 ? 32.0 : 16.0;
 
                   return Padding(
                     padding: EdgeInsets.fromLTRB(
@@ -88,9 +98,12 @@ class _EditorPageState extends State<EditorPage> {
                     ),
                     child: Center(
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 900),
+                        constraints: const BoxConstraints(
+                          maxWidth: 900,
+                        ),
                         child: Column(
                           children: [
+                            /// Preview
                             Expanded(
                               flex: 5,
                               child: ListenableBuilder(
@@ -99,17 +112,38 @@ class _EditorPageState extends State<EditorPage> {
                                   final session = _controller.session;
 
                                   if (session == null) {
-                                    return const SizedBox.shrink();
+                                    return const Center(
+                                      child: CircularProgressIndicator(),
+                                    );
                                   }
 
-                                  return PreviewArea(session: session);
+                                  return PreviewArea(
+                                    session: session,
+                                  );
                                 },
                               ),
                             ),
-                            const SizedBox(height: 12),
+
+                            const SizedBox(height: 16),
+
+                            /// Timeline
+                            ListenableBuilder(
+                              listenable: _controller,
+                              builder: (context, _) {
+                                final session = _controller.session;
+
+                                return TimelineWidget(
+                                  duration:
+                                      session?.trimEnd ??
+                                      const Duration(minutes: 1),
+                                );
+                              },
+                            ),
+
+                            const SizedBox(height: 16),
+
+                            /// Toolbar
                             const EditorToolbar(),
-                            const SizedBox(height: 12),
-                            const TimelinePlaceholder(),
                           ],
                         ),
                       ),
