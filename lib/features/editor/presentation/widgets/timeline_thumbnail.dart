@@ -6,60 +6,52 @@ class TimelineThumbnail extends StatelessWidget {
   const TimelineThumbnail({
     super.key,
     this.imageFile,
-    this.width = 60,
+    this.width = 56,
     this.height = 64,
-    this.selected = false,
   });
 
   final File? imageFile;
   final double width;
   final double height;
-  final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      width: width,
-      height: height,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: selected
-              ? theme.colorScheme.primary
-              : Colors.transparent,
-          width: 2,
-        ),
-        color: theme.colorScheme.surfaceContainerHighest,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: width,
+        height: height,
+        color: Colors.grey.shade900,
+        child: imageFile == null
+            ? _buildPlaceholder()
+            : Image.file(
+                imageFile!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _buildPlaceholder(),
+              ),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: imageFile != null
-          ? Image.file(
-              imageFile!,
-              fit: BoxFit.cover,
-            )
-          : Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xff3A3F47),
-                    Color(0xff565C66),
-                  ],
-                ),
-              ),
-              child: const Center(
-                child: Icon(
-                  Icons.movie,
-                  color: Colors.white70,
-                  size: 20,
-                ),
-              ),
-            ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.grey.shade800,
+            Colors.grey.shade700,
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+      child: const Center(
+        child: Icon(
+          Icons.movie_creation_outlined,
+          color: Colors.white54,
+          size: 20,
+        ),
+      ),
     );
   }
 }
