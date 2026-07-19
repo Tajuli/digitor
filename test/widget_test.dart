@@ -1,8 +1,8 @@
 import 'package:digitor/app/digitor_app.dart';
+import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/presentation/editor_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image_picker/image_picker.dart';
 
 void main() {
   testWidgets('renders Digitor home actions', (tester) async {
@@ -23,8 +23,13 @@ void main() {
       MaterialApp(
         theme: ThemeData(useMaterial3: true, brightness: Brightness.dark),
         home: EditorPage(
-          selectedFile: XFile('/tmp/sample-video.mp4'),
-          isVideo: true,
+          media: MediaItem(
+            id: 'sample-video',
+            path: '/tmp/sample-video.mp4',
+            isVideo: true,
+            duration: Duration.zero,
+            createdAt: DateTime(2026),
+          ),
         ),
       ),
     );
