@@ -61,7 +61,7 @@ class ProjectController extends ChangeNotifier {
   TimelineClip addAudioClip({required String trackId, required String path, required Duration duration, Duration start = Duration.zero}) => _addTypedClip(trackId, ClipType.audio, path: path, duration: duration, start: start);
   TimelineClip _addTypedClip(String trackId, ClipType type, {String? path, required Duration duration, required Duration start, Map<String, dynamic> data = const {}}) {
     final clip = TimelineClip(id: newId(type.name), type: type, start: start, duration: duration, sourceDuration: duration, data: {...data, if (path != null) 'path': path});
-    if (!addClip(trackId: trackId, clip)) throw ArgumentError('Track does not accept ${type.name} clips.');
+    if (!addClip(trackId: trackId, clip: clip)) throw ArgumentError('Track does not accept ${type.name} clips.');
     return clip;
   }
 
