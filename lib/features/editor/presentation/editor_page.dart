@@ -228,7 +228,7 @@ class _EditorPageState extends State<EditorPage> {
                             const SizedBox(height: 8),
                             SizedBox(height: 128, child: EditorToolbar(tools: _toolController, project: _projectController, timeline: _timelineController)),
                           ],
-                        ),
+                        
                     ),
                   );
                 },
