@@ -11,6 +11,7 @@ import 'package:digitor/features/editor/domain/models/editor_project.dart';
 import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/domain/models/timeline_track.dart';
 import 'package:digitor/features/editor/domain/models/timeline_clip.dart';
+import 'package:digitor/features/editor/domain/models/clip_type.dart';
 import 'package:digitor/features/editor/domain/models/track_type.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/widgets/preview_area.dart';
@@ -213,10 +214,20 @@ class _EditorPageState extends State<EditorPage> {
                                 listenable: Listenable.merge([_controller, _projectController]),
                                 builder: (context, _) {
                                   final session = _controller.session;
+                                  final hasTimelineVideo = _projectController.tracks
+                                      .where((track) => track.type == TrackType.video)
+                                      .expand((track) => track.clips)
+                                      .any((clip) => clip.type == ClipType.video);
 
-                                  if (session == null || !_projectController.hasClips) return const EmptyPreviewArea();
+                                  if (!_projectController.hasClips && session == null) {
+                                    return const EmptyPreviewArea();
+                                  }
 
-                                  return PreviewArea(session: session, playbackController: _playbackController);
+                                  return PreviewArea(
+                                    session: session,
+                                    playbackController: _playbackController,
+                                    hasTimelineVideo: hasTimelineVideo,
+                                  );
                                 },
                               ),
                             ),
