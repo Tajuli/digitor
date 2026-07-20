@@ -1,14 +1,16 @@
 import 'dart:io';
 
 import 'package:video_player/video_player.dart';
+import 'package:flutter/services.dart';
 
 class MediaMetadata {
-  const MediaMetadata({required this.duration, required this.hasVideo, required this.hasAudio, this.width, this.height});
+  const MediaMetadata({required this.duration, required this.hasVideo, required this.hasAudio, this.width, this.height, this.frameRate});
   final Duration duration;
   final bool hasVideo;
   final bool hasAudio;
   final int? width;
   final int? height;
+  final double? frameRate;
 }
 
 abstract class MediaMetadataService {
@@ -20,6 +22,7 @@ abstract class MediaMetadataService {
 /// expose stream inventory. Android-specific stream probing can replace this
 /// service without involving widgets.
 class VideoPlayerMediaMetadataService implements MediaMetadataService {
+  static const _channel = MethodChannel('digitor/media_metadata');
   @override
   Future<MediaMetadata?> probeVideo(String path) async {
     if (!await File(path).exists()) return null;
@@ -28,11 +31,29 @@ class VideoPlayerMediaMetadataService implements MediaMetadataService {
       await controller.initialize();
       final value = controller.value;
       if (value.duration <= Duration.zero) return null;
-      return MediaMetadata(duration: value.duration, hasVideo: true, hasAudio: false, width: value.size.width.round(), height: value.size.height.round());
+      // Android's MediaExtractor-backed host implementation reports streams.
+      // A missing host implementation is handled safely rather than guessing
+      // from the filename extension.
+      final details = await _probeStreams(path);
+      return MediaMetadata(duration: value.duration, hasVideo: details.hasVideo, hasAudio: details.hasAudio, width: value.size.width.round(), height: value.size.height.round(), frameRate: details.frameRate);
     } catch (_) {
       return null;
     } finally {
       await controller.dispose();
     }
   }
+
+  Future<_StreamDetails> _probeStreams(String path) async {
+    try {
+      final result = await _channel.invokeMapMethod<String, Object?>('probe', {'path': path});
+      if (result == null) return const _StreamDetails();
+      return _StreamDetails(hasVideo: result['hasVideo'] as bool? ?? true, hasAudio: result['hasAudio'] as bool? ?? false, frameRate: (result['frameRate'] as num?)?.toDouble());
+    } on PlatformException {
+      return const _StreamDetails();
+    } on MissingPluginException {
+      return const _StreamDetails();
+    }
+  }
 }
+
+class _StreamDetails { const _StreamDetails({this.hasVideo = true, this.hasAudio = false, this.frameRate}); final bool hasVideo; final bool hasAudio; final double? frameRate; }

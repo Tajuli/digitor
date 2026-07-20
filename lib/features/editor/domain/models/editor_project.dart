@@ -1,8 +1,9 @@
 import 'package:digitor/features/editor/domain/models/timeline_track.dart';
+import 'package:digitor/features/editor/domain/models/track_order.dart';
 import 'package:flutter/material.dart';
 
 class EditorProject {
-  const EditorProject({
+  EditorProject({
     required this.tracks,
     required this.duration,
 
@@ -11,7 +12,7 @@ class EditorProject {
     this.canvasSize = const Size(1080, 1920),
 
     this.background = Colors.black,
-  });
+  }) : tracks = normalizeTrackOrder(tracks);
 
   final List<TimelineTrack> tracks;
 

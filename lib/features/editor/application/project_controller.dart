@@ -3,11 +3,13 @@ import 'package:digitor/features/editor/domain/models/editor_project.dart';
 import 'package:digitor/features/editor/domain/models/timeline_clip.dart';
 import 'package:digitor/features/editor/domain/models/timeline_track.dart';
 import 'package:digitor/features/editor/domain/models/track_type.dart';
+import 'package:digitor/features/editor/domain/models/track_order.dart';
+import 'package:digitor/features/editor/domain/models/clip_adjustments.dart';
 import 'package:flutter/foundation.dart';
 
 /// Owns project selection and enforces the track/clip compatibility boundary.
 class ProjectController extends ChangeNotifier {
-  ProjectController({required EditorProject project}) : _project = project;
+  ProjectController({required EditorProject project}) : _project = project.copyWith(tracks: normalizeTrackOrder(project.tracks));
 
   EditorProject _project;
   int _idSequence = 0;
@@ -22,7 +24,7 @@ class ProjectController extends ChangeNotifier {
   bool isClipSelected(String clipId) => _selectedClipId == clipId;
   bool isTrackSelected(String trackId) => _selectedTrackId == trackId;
 
-  void updateProject(EditorProject project) { _project = project; notifyListeners(); }
+  void updateProject(EditorProject project) { _project = project.copyWith(tracks: normalizeTrackOrder(project.tracks)); notifyListeners(); }
   void selectTrack(String? trackId) { _selectedTrackId = trackId; _selectedClipId = null; notifyListeners(); }
   void selectClip({required String trackId, required String clipId}) { _selectedTrackId = trackId; _selectedClipId = clipId; notifyListeners(); }
   void clearSelection() { if (_selectedTrackId == null && _selectedClipId == null) return; _selectedTrackId = null; _selectedClipId = null; notifyListeners(); }
@@ -34,7 +36,10 @@ class ProjectController extends ChangeNotifier {
   TimelineTrack _addTrack(TrackType type) {
     final count = tracks.where((track) => track.type == type).length + 1;
     final track = TimelineTrack(id: newId(type.name), name: '${type == TrackType.video ? 'Video' : 'Audio'} $count', type: type);
-    updateProject(_project.copyWith(tracks: [...tracks, track]));
+    final next = type == TrackType.video
+        ? [...tracks.where((item) => item.type == TrackType.video), track, ...tracks.where((item) => item.type == TrackType.audio)]
+        : [...tracks, track];
+    updateProject(_project.copyWith(tracks: next));
     return track;
   }
   void addTrack(TimelineTrack track) => updateProject(_project.copyWith(tracks: [...tracks, track]));
@@ -85,14 +90,15 @@ class ProjectController extends ChangeNotifier {
     if (clip?.linkGroupId == null) return const [];
     return tracks.expand((track) => track.clips).where((item) => item.linkGroupId == clip!.linkGroupId).toList();
   }
-  void linkClips(String firstClipId, String secondClipId) {
+  bool isLinked(String clipId) => getLinkedClips(clipId).length > 1;
+  void linkClips({required String firstClipId, required String secondClipId}) {
     final clips = tracks.expand((track) => track.clips).where((clip) => clip.id == firstClipId || clip.id == secondClipId).toList();
     if (clips.length != 2 || clips[0].type == clips[1].type) throw ArgumentError('Link one visual clip and one audio clip.');
     final group = newId('link');
     _replaceClips({for (final clip in clips) clip.id: clip.copyWith(linkGroupId: group)});
   }
-  void unlinkClipGroup(String clipId) {
-    final linked = getLinkedClips(clipId);
+  void unlinkClipGroup(String linkGroupId) {
+    final linked = tracks.expand((track) => track.clips).where((clip) => clip.linkGroupId == linkGroupId).toList();
     if (linked.isEmpty) return;
     _replaceClips({for (final clip in linked) clip.id: clip.copyWith(clearLinkGroupId: true)});
   }
@@ -110,6 +116,18 @@ class ProjectController extends ChangeNotifier {
     if (_selectedClipId == clipId) clearSelection();
   }
   void updateClip({required String trackId, required TimelineClip clip}) => _replaceClips({clip.id: clip});
+  TimelineClip? get selectedClip => _selectedClipId == null ? null : tracks.expand((track) => track.clips).where((clip) => clip.id == _selectedClipId).firstOrNull;
+  bool supportsVisualTools(TimelineClip? clip) => clip != null && clip.type != ClipType.audio;
+  bool supportsAudioControls(TimelineClip? clip) => clip?.type == ClipType.audio;
+  void setFilter(String clipId, ClipFilterType filter) => _updateSelectedClip(clipId, (clip) => clip.copyWith(filter: filter));
+  void setEffect(String clipId, ClipEffectType effect) => _updateSelectedClip(clipId, (clip) => clip.copyWith(effect: effect));
+  void setColor(String clipId, ClipColorAdjustments value) => _updateSelectedClip(clipId, (clip) => clip.copyWith(colorAdjustments: value));
+  void setMuted(String clipId, bool muted) => _updateSelectedClip(clipId, (clip) => clip.copyWith(muted: muted));
+  void _updateSelectedClip(String clipId, TimelineClip Function(TimelineClip) transform) {
+    final track = _trackFor(clipId); final clip = track?.clips.where((item) => item.id == clipId).firstOrNull;
+    if (track == null || clip == null || track.locked || clip.locked) return;
+    _replaceClips({clipId: transform(clip)});
+  }
   TimelineTrack? _trackFor(String clipId) => tracks.where((track) => track.clips.any((clip) => clip.id == clipId)).firstOrNull;
   void _replaceClips(Map<String, TimelineClip> replacements) => updateProject(_project.copyWith(tracks: tracks.map((track) => track.copyWith(clips: track.clips.map((clip) => replacements[clip.id] ?? clip).toList())).toList()));
 }
