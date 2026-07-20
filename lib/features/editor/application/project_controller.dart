@@ -24,7 +24,20 @@ class ProjectController extends ChangeNotifier {
   bool isClipSelected(String clipId) => _selectedClipId == clipId;
   bool isTrackSelected(String trackId) => _selectedTrackId == trackId;
 
-  void updateProject(EditorProject project) { _project = project.copyWith(tracks: normalizeTrackOrder(project.tracks)); notifyListeners(); }
+  void updateProject(EditorProject project) {
+    final normalized = normalizeTrackOrder(project.tracks);
+    final calculatedDuration = normalized
+        .expand((track) => track.clips)
+        .fold(Duration.zero, (end, clip) {
+      final clipEnd = clip.start + clip.duration;
+      return clipEnd > end ? clipEnd : end;
+    });
+    _project = project.copyWith(
+      tracks: normalized,
+      duration: calculatedDuration,
+    );
+    notifyListeners();
+  }
   void selectTrack(String? trackId) { _selectedTrackId = trackId; _selectedClipId = null; notifyListeners(); }
   void selectClip({required String trackId, required String clipId}) { _selectedTrackId = trackId; _selectedClipId = clipId; notifyListeners(); }
   void clearSelection() { if (_selectedTrackId == null && _selectedClipId == null) return; _selectedTrackId = null; _selectedClipId = null; notifyListeners(); }
@@ -102,7 +115,18 @@ class ProjectController extends ChangeNotifier {
     if (linked.isEmpty) return;
     _replaceClips({for (final clip in linked) clip.id: clip.copyWith(clearLinkGroupId: true)});
   }
-  void removeLinkedPair(String clipId) { for (final clip in getLinkedClips(clipId)) { removeClip(trackId: _trackFor(clip.id)!.id, clipId: clip.id); } }
+  void removeLinkedPair(String clipId) {
+    final linked = getLinkedClips(clipId);
+    final ids = (linked.isEmpty ? [clipId] : linked.map((clip) => clip.id)).toSet();
+    updateProject(_project.copyWith(
+      tracks: tracks
+          .map((track) => track.copyWith(
+                clips: track.clips.where((clip) => !ids.contains(clip.id)).toList(),
+              ))
+          .toList(),
+    ));
+    if (ids.contains(_selectedClipId)) clearSelection();
+  }
   void removeClip({required String trackId, required String clipId}) {
     final removed = _trackFor(clipId)?.clips.where((clip) => clip.id == clipId).firstOrNull;
     updateProject(_project.copyWith(tracks: tracks.map((track) => track.id == trackId ? track.copyWith(clips: track.clips.where((clip) => clip.id != clipId).toList()) : track).toList()));

@@ -5,11 +5,12 @@ import 'package:digitor/features/editor/application/timeline_provider.dart';
 import 'package:digitor/features/editor/application/project_controller.dart';
 import 'package:digitor/features/editor/application/timeline_controller.dart';
 import 'package:digitor/features/editor/application/playback_controller.dart';
-import 'package:digitor/features/editor/application/video_clip.dart';
 import 'package:digitor/features/editor/application/video_thumbnail_generator.dart';
+import 'package:digitor/features/editor/application/media_metadata_service.dart';
 import 'package:digitor/features/editor/domain/models/editor_project.dart';
 import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/domain/models/timeline_track.dart';
+import 'package:digitor/features/editor/domain/models/timeline_clip.dart';
 import 'package:digitor/features/editor/domain/models/track_type.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/widgets/preview_area.dart';
@@ -35,6 +36,8 @@ class _EditorPageState extends State<EditorPage> {
   late final TimelineController _timelineController;
   late final PlaybackController _playbackController;
   late final EditorToolController _toolController;
+  final MediaMetadataService _metadataService = VideoPlayerMediaMetadataService();
+  String? _activeClipId;
 
   @override
   void initState() {
@@ -57,11 +60,12 @@ class _EditorPageState extends State<EditorPage> {
     _playbackController = PlaybackController();
     _toolController = EditorToolController();
 
-    if (widget.media != null) {
-      _controller.loadMedia(widget.media!);
-      _projectController.addVideoWithLinkedAudio(videoTrackId: 'primary-video', path: widget.media!.path, duration: widget.media!.duration, hasAudio: false);
-      _playbackController.replaceMedia(widget.media!.path);
-    }
+    _timelineController.addListener(_syncPreviewForTimeline);
+    _projectController.addListener(_syncPreviewForTimeline);
+    _playbackController.addListener(_syncTimelineForPlayback);
+    _toolController.addListener(_syncMagnetState);
+
+    if (widget.media != null) _importInitialMedia(widget.media!);
 
     _loadTimeline();
   }
@@ -75,6 +79,61 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
+  Future<void> _importInitialMedia(MediaItem media) async {
+    if (!media.isVideo) return;
+    final metadata = await _metadataService.probeVideo(media.path);
+    if (!mounted) return;
+    final duration = metadata?.duration ?? media.duration;
+    if (duration > Duration.zero) {
+      _timelineController.addVideoWithLinkedAudio(
+        trackId: 'primary-video',
+        path: media.path,
+        duration: duration,
+        // When stream probing is unavailable, retain the embedded audio path.
+        hasAudio: metadata?.hasAudio ?? true,
+      );
+      _syncPreviewForTimeline();
+    }
+  }
+
+  void _syncMagnetState() => _timelineController.setMagnetEnabled(_toolController.magnetEnabled);
+
+  void _syncPreviewForTimeline() {
+    final position = _timelineController.position;
+    final TimelineClip? visual = _projectController.tracks
+        .where((track) => track.type == TrackType.video)
+        .expand((track) => track.clips)
+        .where((clip) => clip.type.name == 'video' && clip.start <= position && position < clip.start + clip.duration)
+        .firstOrNull;
+    if (visual == null) {
+      _activeClipId = null;
+      if (_playbackController.isPlaying) _playbackController.pause();
+      return;
+    }
+    final path = visual.data['path'] as String?;
+    if (path == null) return;
+    final sourcePosition = position - visual.start + visual.sourceStart;
+    if (_activeClipId != visual.id || _playbackController.sourcePath != path) {
+      _activeClipId = visual.id;
+      _playbackController.replaceMedia(path).then((_) {
+        if (mounted && _activeClipId == visual.id) _playbackController.seek(sourcePosition);
+      });
+    } else if (!_playbackController.isPlaying) {
+      _playbackController.seek(sourcePosition);
+    }
+  }
+
+  void _syncTimelineForPlayback() {
+    if (_activeClipId == null || !_playbackController.isInitialized) return;
+    final clip = _projectController.tracks
+        .expand((track) => track.clips)
+        .where((clip) => clip.id == _activeClipId)
+        .firstOrNull;
+    if (clip == null) return;
+    final value = clip.start + (_playbackController.position - clip.sourceStart);
+    _timelineController.setPosition(value);
+  }
+
   @override
   void didUpdateWidget(covariant EditorPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -82,12 +141,16 @@ class _EditorPageState extends State<EditorPage> {
     if (oldWidget.media != widget.media && widget.media != null) {
       _controller.loadMedia(widget.media!);
       _loadTimeline();
-      _playbackController.replaceMedia(widget.media!.path);
+      _importInitialMedia(widget.media!);
     }
   }
 
   @override
   void dispose() {
+    _timelineController.removeListener(_syncPreviewForTimeline);
+    _projectController.removeListener(_syncPreviewForTimeline);
+    _playbackController.removeListener(_syncTimelineForPlayback);
+    _toolController.removeListener(_syncMagnetState);
     _timelineProvider.dispose();
     _timelineController.dispose();
     _playbackController.dispose();
@@ -142,13 +205,10 @@ class _EditorPageState extends State<EditorPage> {
                       horizontalPadding,
                       16,
                     ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 900),
-                        child: Column(
+                      child: Column(
                           children: [
                             Expanded(
-                              flex: 5,
+                              flex: constraints.maxHeight < 560 ? 3 : 5,
                               child: ListenableBuilder(
                                 listenable: Listenable.merge([_controller, _projectController]),
                                 builder: (context, _) {
@@ -160,13 +220,15 @@ class _EditorPageState extends State<EditorPage> {
                                 },
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            SizedBox(height: 220, child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController)),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              flex: constraints.maxHeight < 560 ? 3 : 2,
+                              child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController),
+                            ),
                             const SizedBox(height: 8),
                             SizedBox(height: 128, child: EditorToolbar(tools: _toolController, project: _projectController, timeline: _timelineController)),
                           ],
                         ),
-                      ),
                     ),
                   );
                 },

@@ -150,7 +150,6 @@ class _SubToolbar extends StatelessWidget {
         if (clip == null || selectedTrackId == null) return;
         timeline.splitClip(trackId: selectedTrackId, clipId: clip.id, position: timeline.position);
       }),
-      _button('Trim', Icons.crop, clip != null, tools.toggleTrimMode),
       _button(
         'Magnet',
         Icons.grid_on,

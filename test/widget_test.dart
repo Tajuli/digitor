@@ -43,7 +43,7 @@ void main() {
     expect(find.text('Editor'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
     expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Add media to start editing'), findsOneWidget);
 
     for (final label in [
       'Edit',

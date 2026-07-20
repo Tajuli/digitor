@@ -9,6 +9,7 @@ import '../domain/models/editor_project.dart';
 import 'editor_history_controller.dart';
 import 'project_commands.dart';
 import 'timeline_math.dart';
+import '../presentation/timeline/timeline_constants.dart';
 
 class TimelineController extends ChangeNotifier {
   TimelineController({
@@ -22,6 +23,7 @@ class TimelineController extends ChangeNotifier {
   double pixelsPerSecond;
   final double snapDistance;
   final EditorHistoryController history;
+  bool _magnetEnabled = true;
 
   Duration _position = Duration.zero;
   Duration _trimStart = Duration.zero;
@@ -32,6 +34,13 @@ class TimelineController extends ChangeNotifier {
   Duration get trimEnd => _trimEnd;
 
   double get zoom => pixelsPerSecond;
+  bool get magnetEnabled => _magnetEnabled;
+
+  void setMagnetEnabled(bool value) {
+    if (_magnetEnabled == value) return;
+    _magnetEnabled = value;
+    notifyListeners();
+  }
 
   /// The supported zoom presets are intentionally discrete so timeline layout
   /// remains predictable for thumbnails and future waveform rendering.
@@ -89,11 +98,12 @@ class TimelineController extends ChangeNotifier {
 
   /// Import operations insert at the playhead (or zero in an empty project)
   /// and create a single undo snapshot per completed picker action.
-  void addVideoWithLinkedAudio({required String trackId, required String path, required Duration duration, required bool hasAudio}) => _recordProjectMutation(() => projectController.addVideoWithLinkedAudio(videoTrackId: trackId, path: path, duration: duration, hasAudio: hasAudio, start: _position));
-  void addImageClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addImageClip(trackId: trackId, path: path, duration: duration, start: _position));
-  void addOverlayClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addOverlayClip(trackId: trackId, path: path, duration: duration, start: _position));
-  void addTextClip({required String trackId, required String text}) => _recordProjectMutation(() => projectController.addTextClip(trackId: trackId, text: text, start: _position));
-  void addAudioClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addAudioClip(trackId: trackId, path: path, duration: duration, start: _position));
+  Duration get insertionPosition => snap(_position);
+  void addVideoWithLinkedAudio({required String trackId, required String path, required Duration duration, required bool hasAudio}) => _recordProjectMutation(() => projectController.addVideoWithLinkedAudio(videoTrackId: trackId, path: path, duration: duration, hasAudio: hasAudio, start: insertionPosition));
+  void addImageClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addImageClip(trackId: trackId, path: path, duration: duration, start: insertionPosition));
+  void addOverlayClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addOverlayClip(trackId: trackId, path: path, duration: duration, start: insertionPosition));
+  void addTextClip({required String trackId, required String text}) => _recordProjectMutation(() => projectController.addTextClip(trackId: trackId, text: text, start: insertionPosition));
+  void addAudioClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addAudioClip(trackId: trackId, path: path, duration: duration, start: insertionPosition));
   void addVideoTrack() => _recordProjectMutation(projectController.addVideoTrack);
   void addAudioTrack() => _recordProjectMutation(projectController.addAudioTrack);
   void unlinkClipGroup(String clipId) { final group = projectController.getLinkedClips(clipId).firstOrNull?.linkGroupId; if (group != null) _recordProjectMutation(() => projectController.unlinkClipGroup(group)); }
@@ -104,7 +114,7 @@ class TimelineController extends ChangeNotifier {
   void deleteSelectedClip() {
     final clip = projectController.selectedClip;
     final track = clip == null ? null : _trackContaining(clip.id);
-    if (clip != null && track != null) _recordProjectMutation(() => projectController.removeClip(trackId: track.id, clipId: clip.id));
+    if (clip != null && track != null) _recordProjectMutation(() => projectController.removeLinkedPair(clip.id));
   }
   void _recordProjectMutation(void Function() mutation) { final before = projectController.project; mutation(); final after = projectController.project; if (!identical(before, after)) history.record(ProjectSnapshotCommand(projectController, before, after)); }
 
@@ -233,8 +243,9 @@ class TimelineController extends ChangeNotifier {
     final track = _track(trackId); final clip = track == null ? null : _clip(track, clipId);
     if (track == null || clip == null || track.locked || clip.locked) return clip ?? const TimelineClip(id: '', type: ClipType.video, start: Duration.zero, duration: Duration.zero);
     final min = const Duration(milliseconds: 200);
-    var newStart = start < Duration.zero ? Duration.zero : start;
-    var newEnd = end;
+    var newStart = snap(start, excludingClipId: clipId);
+    var newEnd = snap(end, excludingClipId: clipId);
+    if (newStart < Duration.zero) newStart = Duration.zero;
     if (newEnd - newStart < min) { if (start != clip.start) newStart = newEnd - min; else newEnd = newStart + min; }
     if (newStart < Duration.zero) newStart = Duration.zero;
     final sourceDelta = newStart - clip.start;
@@ -264,10 +275,19 @@ class TimelineController extends ChangeNotifier {
   }
 
   Duration snap(Duration value, {String? excludingClipId}) {
+    if (!_magnetEnabled) return value < Duration.zero ? Duration.zero : value;
     final candidates = <Duration>[Duration.zero, projectController.project.duration, _position];
     for (final track in projectController.tracks) { for (final clip in track.clips) { if (clip.id != excludingClipId) { candidates..add(clip.start)..add(clip.start + clip.duration); } } }
     final nearest = candidates.reduce((a, b) => (a - value).abs() < (b - value).abs() ? a : b);
-    return (nearest - value).abs() <= Duration(milliseconds: (snapDistance / pixelsPerSecond * 1000).round()) ? nearest : value < Duration.zero ? Duration.zero : value;
+    final threshold = TimelineMath.pixelsToDuration(
+      TimelineConstants.snapThresholdPixels,
+      pixelsPerSecond,
+    );
+    return (nearest - value).abs() <= threshold
+        ? nearest
+        : value < Duration.zero
+            ? Duration.zero
+            : value;
   }
 
   TimelineTrack? _track(String id) { for (final track in projectController.tracks) { if (track.id == id) return track; } return null; }
