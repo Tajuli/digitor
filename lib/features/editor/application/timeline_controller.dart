@@ -84,9 +84,11 @@ class TimelineController extends ChangeNotifier {
 
   void zoomIn() {
     final index = _nearestZoomIndex();
-    setZoom(TimelineZoom.levels[
-      index < TimelineZoom.levels.length - 1 ? index + 1 : index,
-    ]);
+    setZoom(
+      TimelineZoom.levels[
+        index < TimelineZoom.levels.length - 1 ? index + 1 : index
+      ],
+    );
   }
 
   void zoomOut() {
