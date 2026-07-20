@@ -35,7 +35,7 @@ class VideoPlayerMediaMetadataService implements MediaMetadataService {
       // A missing host implementation is handled safely rather than guessing
       // from the filename extension.
       final details = await _probeStreams(path);
-      return MediaMetadata(duration: value.duration, hasVideo: details.hasVideo, hasAudio: details.hasAudio, width: value.size.width.round(), height: value.size.height.round(), frameRate: details.frameRate);
+      return MediaMetadata(duration: value.duration, hasVideo: details.hasVideo ?? true, hasAudio: details.hasAudio ?? true, width: value.size.width.round(), height: value.size.height.round(), frameRate: details.frameRate);
     } catch (_) {
       return null;
     } finally {
@@ -56,4 +56,4 @@ class VideoPlayerMediaMetadataService implements MediaMetadataService {
   }
 }
 
-class _StreamDetails { const _StreamDetails({this.hasVideo = true, this.hasAudio = false, this.frameRate}); final bool hasVideo; final bool hasAudio; final double? frameRate; }
+class _StreamDetails { const _StreamDetails({this.hasVideo, this.hasAudio, this.frameRate}); final bool? hasVideo; final bool? hasAudio; final double? frameRate; }

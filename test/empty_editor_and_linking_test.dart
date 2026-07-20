@@ -38,4 +38,44 @@ void main() {
     timeline.history.undo();
     expect(controller.tracks[0].clips.single.linkGroupId, isNotNull);
   });
+
+  test('video import creates aligned linked audio on an available audio track', () {
+    final controller = project();
+    final timeline = TimelineController(projectController: controller);
+    timeline.addVideoWithLinkedAudio(
+      trackId: 'video',
+      path: '/video.mp4',
+      duration: const Duration(seconds: 8),
+      hasAudio: true,
+    );
+    final video = controller.tracks.first.clips.single;
+    final audio = controller.tracks.last.clips.single;
+    expect(video.start, audio.start);
+    expect(video.duration, audio.duration);
+    expect(video.sourceDuration, audio.sourceDuration);
+    expect(video.linkGroupId, audio.linkGroupId);
+  });
+
+  test('audio-less video import does not add an audio clip', () {
+    final controller = project();
+    final timeline = TimelineController(projectController: controller);
+    timeline.addVideoWithLinkedAudio(
+      trackId: 'video',
+      path: '/silent.mp4',
+      duration: const Duration(seconds: 3),
+      hasAudio: false,
+    );
+    expect(controller.tracks.first.clips, hasLength(1));
+    expect(controller.tracks.last.clips, isEmpty);
+  });
+
+  test('deleting a linked clip deletes its pair', () {
+    final controller = project();
+    final timeline = TimelineController(projectController: controller);
+    timeline.addVideoWithLinkedAudio(trackId: 'video', path: '/video.mp4', duration: const Duration(seconds: 3), hasAudio: true);
+    final video = controller.tracks.first.clips.single;
+    controller.selectClip(trackId: 'video', clipId: video.id);
+    timeline.deleteSelectedClip();
+    expect(controller.tracks.expand((track) => track.clips), isEmpty);
+  });
 }

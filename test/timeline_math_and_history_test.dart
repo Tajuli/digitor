@@ -17,6 +17,19 @@ void main() {
     });
   });
 
+  test('magnet snapping is pixel based and can be disabled', () {
+    final project = _projectWithClips([_clip('anchor', const Duration(seconds: 2))]);
+    final controller = TimelineController(projectController: project, pixelsPerSecond: 80);
+    expect(controller.snap(const Duration(milliseconds: 2120)), const Duration(seconds: 2));
+    controller.setMagnetEnabled(false);
+    expect(controller.snap(const Duration(milliseconds: 2120)), const Duration(milliseconds: 2120));
+    controller.setMagnetEnabled(true);
+    controller.setZoom(160);
+    expect(controller.snap(const Duration(milliseconds: 2060)), const Duration(seconds: 2));
+    controller.dispose();
+    project.dispose();
+  });
+
   test('move undo redo and trim preserve source offset', () {
     final clip = TimelineClip(id: 'clip', type: ClipType.video, start: Duration.zero, duration: const Duration(seconds: 5), sourceDuration: const Duration(seconds: 10));
     final project = ProjectController(project: EditorProject(duration: const Duration(seconds: 10), tracks: [TimelineTrack(id: 'video', name: 'Video', type: TrackType.video, clips: [clip])]));

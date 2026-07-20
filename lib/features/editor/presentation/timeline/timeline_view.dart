@@ -25,17 +25,16 @@ class _TimelineViewState extends State<TimelineView> {
   bool _manualScroll = false;
   final MediaPickerService _picker = MediaPickerService();
   final MediaMetadataService _metadata = VideoPlayerMediaMetadataService();
-  @override void initState() { super.initState(); _scroll = TimelineScrollController()..horizontal.addListener(_onScroll); widget.playbackController.addListener(_playbackTick); }
+  @override void initState() { super.initState(); _scroll = TimelineScrollController()..horizontal.addListener(_onScroll)..synchronizeVerticalScrollers(); }
   void _onScroll() { if (mounted) setState(() {}); }
-  void _playbackTick() { if (!mounted) return; widget.timelineController.setPosition(widget.playbackController.position); }
-  @override void dispose() { widget.playbackController.removeListener(_playbackTick); _scroll.horizontal.removeListener(_onScroll); _scroll.dispose(); super.dispose(); }
+  @override void dispose() { _scroll.horizontal.removeListener(_onScroll); _scroll.dispose(); super.dispose(); }
   @override Widget build(BuildContext context) => AnimatedBuilder(
     animation: Listenable.merge([widget.controller, widget.timelineController]),
     builder: (context, _) => Column(children: [
       _Toolbar(controller: widget.timelineController, projectController: widget.controller), const Divider(height: 1),
       Expanded(child: NotificationListener<UserScrollNotification>(onNotification: (n) { _manualScroll = n.direction != ScrollDirection.idle; return false; }, child: Stack(children: [
-        TimelineCanvas(projectController: widget.controller, timelineController: widget.timelineController, scrollController: _scroll, playbackController: widget.playbackController),
-        Positioned(left: 0, top: 0, bottom: 0, child: TrackHeaderColumn(tracks: widget.controller.tracks, onAdd: _showTrackAddMenu)),
+        Positioned.fill(child: Padding(padding: const EdgeInsets.only(left: TimelineConstants.headerWidth), child: TimelineCanvas(projectController: widget.controller, timelineController: widget.timelineController, scrollController: _scroll, playbackController: widget.playbackController))),
+        Positioned(left: 0, top: 0, bottom: 0, width: TimelineConstants.headerWidth, child: TrackHeaderColumn(tracks: widget.controller.tracks, verticalController: _scroll.headerVertical, onAdd: _showTrackAddMenu)),
       ]))),
     ]),
   );
