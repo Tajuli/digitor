@@ -30,21 +30,20 @@ class VideoPreview extends StatelessWidget {
             ),
           ),
           Container(
-                decoration: const BoxDecoration(
-                  color: Colors.black38,
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  iconSize: 56,
-                  color: Colors.white,
-                  icon: Icon(
-                    playbackController.isPlaying
-                        ? Icons.pause
-                        : Icons.play_arrow,
-                  ),
-                  onPressed: playbackController.toggle,
-                ),
+            decoration: const BoxDecoration(
+              color: Colors.black38,
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              iconSize: 56,
+              color: Colors.white,
+              icon: Icon(
+                playbackController.isPlaying
+                    ? Icons.pause
+                    : Icons.play_arrow,
               ),
+              onPressed: playbackController.toggle,
+            ),
           ),
         ],
       );
