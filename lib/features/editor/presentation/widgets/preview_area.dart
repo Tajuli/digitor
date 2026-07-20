@@ -6,23 +6,36 @@ import 'package:digitor/features/editor/presentation/widgets/video_preview.dart'
 import 'package:flutter/material.dart';
 
 class PreviewArea extends StatelessWidget {
-  const PreviewArea({super.key, required this.session, required this.playbackController});
+  const PreviewArea({
+    super.key,
+    this.session,
+    required this.playbackController,
+    this.hasTimelineVideo = false,
+  });
 
-  final EditorSession session;
+  final EditorSession? session;
   final PlaybackController playbackController;
+  final bool hasTimelineVideo;
 
   @override
-  Widget build(BuildContext context) => _PreviewFrame(
-        child: session.media.isVideo
-            ? VideoPreview(playbackController: playbackController)
-            : Image.file(
-                File(session.media.path),
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => const Center(
-                  child: Icon(Icons.broken_image_rounded, size: 60),
-                ),
-              ),
-      );
+  Widget build(BuildContext context) {
+    final media = session?.media;
+    final shouldShowVideo = hasTimelineVideo || media?.isVideo == true;
+
+    return _PreviewFrame(
+      child: shouldShowVideo
+          ? VideoPreview(playbackController: playbackController)
+          : media != null
+              ? Image.file(
+                  File(media.path),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Center(
+                    child: Icon(Icons.broken_image_rounded, size: 60),
+                  ),
+                )
+              : const EmptyPreviewContent(),
+    );
+  }
 }
 
 class EmptyPreviewArea extends StatelessWidget {
@@ -30,21 +43,29 @@ class EmptyPreviewArea extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const _PreviewFrame(
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.add_photo_alternate_outlined, size: 48),
-              SizedBox(height: 12),
-              Text('Add media to start editing'),
-            ],
-          ),
+        child: EmptyPreviewContent(),
+      );
+}
+
+class EmptyPreviewContent extends StatelessWidget {
+  const EmptyPreviewContent({super.key});
+
+  @override
+  Widget build(BuildContext context) => const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add_photo_alternate_outlined, size: 48),
+            SizedBox(height: 12),
+            Text('Add media to start editing'),
+          ],
         ),
       );
 }
 
 class _PreviewFrame extends StatelessWidget {
   const _PreviewFrame({required this.child});
+
   final Widget child;
 
   @override
