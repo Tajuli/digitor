@@ -1,92 +1,35 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import '../../application/playback_controller.dart';
 
-class VideoPreview extends StatefulWidget {
+class VideoPreview extends StatelessWidget {
   const VideoPreview({
     super.key,
-    required this.path,
+    required this.playbackController,
   });
 
-  final String path;
-
-  @override
-  State<VideoPreview> createState() => _VideoPreviewState();
-}
-
-class _VideoPreviewState extends State<VideoPreview> {
-  late final VideoPlayerController _controller;
-
-  bool _showControls = true;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = VideoPlayerController.file(
-      File(widget.path),
-    )
-      ..setLooping(true)
-      ..initialize().then((_) {
-        if (mounted) {
-          setState(() {});
-        }
-      });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _togglePlayPause() {
-    if (!_controller.value.isInitialized) return;
-
-    if (_controller.value.isPlaying) {
-      _controller.pause();
-    } else {
-      _controller.play();
-    }
-
-    setState(() {});
-  }
-
-  void _toggleControls() {
-    setState(() {
-      _showControls = !_showControls;
-    });
-  }
+  final PlaybackController playbackController;
 
   @override
   Widget build(BuildContext context) {
-    if (!_controller.value.isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
-    }
-
-    return GestureDetector(
-      onTap: _toggleControls,
-      child: Stack(
+    return AnimatedBuilder(animation: playbackController, builder: (context, _) {
+      if (playbackController.error != null) return Center(child: Text(playbackController.error!));
+      final controller = playbackController.videoController;
+      if (controller == null || !controller.value.isInitialized) return const Center(child: CircularProgressIndicator());
+      return Stack(
         alignment: Alignment.center,
         children: [
           SizedBox.expand(
             child: FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
-                width: _controller.value.size.width,
-                height: _controller.value.size.height,
-                child: VideoPlayer(_controller),
+                width: controller.value.size.width,
+                height: controller.value.size.height,
+                child: VideoPlayer(controller),
               ),
             ),
           ),
-          if (_showControls)
-            AnimatedOpacity(
-              opacity: 1,
-              duration: const Duration(milliseconds: 200),
-              child: Container(
+          Container(
                 decoration: const BoxDecoration(
                   color: Colors.black38,
                   shape: BoxShape.circle,
@@ -95,16 +38,16 @@ class _VideoPreviewState extends State<VideoPreview> {
                   iconSize: 56,
                   color: Colors.white,
                   icon: Icon(
-                    _controller.value.isPlaying
+                    playbackController.isPlaying
                         ? Icons.pause
                         : Icons.play_arrow,
                   ),
-                  onPressed: _togglePlayPause,
+                  onPressed: playbackController.toggle,
                 ),
               ),
-            ),
+          ),
         ],
-      ),
-    );
+      );
+    });
   }
 }

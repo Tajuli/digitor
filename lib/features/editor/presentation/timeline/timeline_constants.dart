@@ -22,4 +22,11 @@ class TimelineConstants {
       EdgeInsets.symmetric(horizontal: 6);
 
   static const double playheadWidth = 2;
+  static const double playheadLineWidth = 2;
+  static const double playheadHandleSize = 12;
+  static const double playheadHitWidth = 36;
+  static const double playheadLabelHeight = 20;
+  static const double trimHandleWidth = 12;
+  static const Duration minimumClipDuration = Duration(milliseconds: 200);
+  static const double viewportFollowThreshold = .75;
 }

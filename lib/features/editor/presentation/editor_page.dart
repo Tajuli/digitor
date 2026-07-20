@@ -3,6 +3,7 @@ import 'package:digitor/features/editor/application/editor_controller.dart';
 import 'package:digitor/features/editor/application/timeline_provider.dart';
 import 'package:digitor/features/editor/application/project_controller.dart';
 import 'package:digitor/features/editor/application/timeline_controller.dart';
+import 'package:digitor/features/editor/application/playback_controller.dart';
 import 'package:digitor/features/editor/application/video_clip.dart';
 import 'package:digitor/features/editor/application/video_thumbnail_generator.dart';
 import 'package:digitor/features/editor/domain/models/editor_project.dart';
@@ -31,6 +32,7 @@ class _EditorPageState extends State<EditorPage> {
   late final TimelineProvider _timelineProvider;
   late final ProjectController _projectController;
   late final TimelineController _timelineController;
+  late final PlaybackController _playbackController;
 
   @override
   void initState() {
@@ -46,6 +48,7 @@ class _EditorPageState extends State<EditorPage> {
       tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])],
     ));
     _timelineController = TimelineController(projectController: _projectController);
+    _playbackController = PlaybackController()..replaceMedia(widget.media.path);
 
     _loadTimeline();
   }
@@ -67,6 +70,7 @@ class _EditorPageState extends State<EditorPage> {
       _controller.loadMedia(widget.media);
       _projectController.updateProject(EditorProject(duration: widget.media.duration, tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])]));
       _loadTimeline();
+      _playbackController.replaceMedia(widget.media.path);
     }
   }
 
@@ -74,6 +78,7 @@ class _EditorPageState extends State<EditorPage> {
   void dispose() {
     _timelineProvider.dispose();
     _timelineController.dispose();
+    _playbackController.dispose();
     _projectController.dispose();
     _controller.dispose();
     super.dispose();
@@ -142,12 +147,12 @@ class _EditorPageState extends State<EditorPage> {
                                     );
                                   }
 
-                                  return PreviewArea(session: session);
+                                  return PreviewArea(session: session, playbackController: _playbackController);
                                 },
                               ),
                             ),
                             const SizedBox(height: 16),
-                            SizedBox(height: 220, child: TimelineView(controller: _projectController, timelineController: _timelineController)),
+                            SizedBox(height: 220, child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController)),
                             const SizedBox(height: 16),
                             const EditorToolbar(),
                           ],
