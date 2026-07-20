@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'timeline_clip.dart';
+import '../domain/models/clip_type.dart';
 
 class TextClip extends TimelineClip {
   const TextClip({
@@ -8,7 +9,7 @@ class TextClip extends TimelineClip {
     required super.start,
     required super.duration,
 
-    required this.text,
+    required this.text, super.type = ClipType.text,
 
     this.fontSize = 40,
     this.color = Colors.white,

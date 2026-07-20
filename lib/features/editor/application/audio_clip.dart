@@ -1,4 +1,5 @@
 import 'package:digitor/features/editor/domain/models/timeline_clip.dart';
+import 'package:digitor/features/editor/domain/models/clip_type.dart';
 
 class AudioClip extends TimelineClip {
   const AudioClip({
@@ -6,7 +7,7 @@ class AudioClip extends TimelineClip {
     required super.start,
     required super.duration,
 
-    required this.path,
+    required this.path, super.type = ClipType.audio,
 
     this.volume = 1,
 

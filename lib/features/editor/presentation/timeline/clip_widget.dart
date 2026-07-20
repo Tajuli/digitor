@@ -1,102 +1,47 @@
 import 'package:flutter/material.dart';
 
 import '../../application/project_controller.dart';
-import '../../domain/models/audio_clip.dart';
-import '../../domain/models/image_clip.dart';
-import '../../domain/models/overlay_clip.dart';
-import '../../domain/models/text_clip.dart';
+import '../../domain/models/clip_type.dart';
 import '../../domain/models/timeline_clip.dart';
-import '../../domain/models/video_clip.dart';
 import 'timeline_constants.dart';
 
-class ClipWidget extends StatelessWidget {
-  const ClipWidget({
-    super.key,
-    required this.clip,
-    required this.controller,
-    required this.trackId,
-  });
-
+class ClipWidget extends StatefulWidget {
+  const ClipWidget({super.key, required this.clip, required this.controller, required this.trackId, required this.pixelsPerSecond, required this.onMoveEnd});
   final TimelineClip clip;
   final ProjectController controller;
   final String trackId;
+  final double pixelsPerSecond;
+  final void Function(String clipId, String trackId, Duration start, Offset globalPosition) onMoveEnd;
+  @override State<ClipWidget> createState() => _ClipWidgetState();
+}
 
-  Color _color() {
-    if (clip is VideoClip) return Colors.blue;
-    if (clip is ImageClip) return Colors.green;
-    if (clip is TextClip) return Colors.orange;
-    if (clip is OverlayClip) return Colors.purple;
-    if (clip is AudioClip) return Colors.red;
-    return Colors.grey;
-  }
-
-  String _title() {
-    if (clip is VideoClip) return "VIDEO";
-    if (clip is ImageClip) return "IMAGE";
-    if (clip is TextClip) return "TEXT";
-    if (clip is OverlayClip) return "OVERLAY";
-    if (clip is AudioClip) return "AUDIO";
-    return "CLIP";
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final left = clip.start.inMilliseconds /
-        1000 *
-        TimelineConstants.pixelsPerSecond;
-
-    final width = clip.duration.inMilliseconds /
-        1000 *
-        TimelineConstants.pixelsPerSecond;
-
-    final selected = controller.isClipSelected(clip.id);
-
-    return Positioned(
-      left: left,
+class _ClipWidgetState extends State<ClipWidget> {
+  late Duration _displayStart;
+  @override void initState() { super.initState(); _displayStart = widget.clip.start; }
+  @override void didUpdateWidget(covariant ClipWidget oldWidget) { super.didUpdateWidget(oldWidget); if (oldWidget.clip.start != widget.clip.start) _displayStart = widget.clip.start; }
+  @override Widget build(BuildContext context) {
+    final selected = widget.controller.isClipSelected(widget.clip.id);
+    final width = (widget.clip.duration.inMilliseconds / 1000 * widget.pixelsPerSecond).clamp(24.0, double.infinity).toDouble();
+    return AnimatedPositioned(
+      duration: TimelineConstants.movementAnimationDuration,
+      curve: Curves.easeOut,
+      left: _displayStart.inMilliseconds / 1000 * widget.pixelsPerSecond,
+      top: (TimelineConstants.trackHeight - TimelineConstants.clipHeight) / 2,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () {
-          controller.selectClip(
-            trackId: trackId,
-            clipId: clip.id,
-          );
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: width,
-          height: 56,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: _color(),
-            borderRadius: BorderRadius.circular(
-              TimelineConstants.clipRadius,
-            ),
-            border: Border.all(
-              color: selected
-                  ? Colors.yellow
-                  : Colors.transparent,
-              width: 3,
-            ),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: Colors.yellow.withOpacity(.35),
-                      blurRadius: 10,
-                    )
-                  ]
-                : null,
-          ),
-          child: Text(
-            _title(),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
+        onTap: () => widget.controller.selectClip(trackId: widget.trackId, clipId: widget.clip.id),
+        onHorizontalDragUpdate: (details) => setState(() { _displayStart += Duration(milliseconds: (details.delta.dx / widget.pixelsPerSecond * 1000).round()); if (_displayStart < Duration.zero) _displayStart = Duration.zero; }),
+        onHorizontalDragEnd: (details) => widget.onMoveEnd(widget.clip.id, widget.trackId, _displayStart, details.globalPosition),
+        child: RepaintBoundary(child: AnimatedContainer(
+          duration: TimelineConstants.movementAnimationDuration, width: width, height: TimelineConstants.clipHeight,
+          decoration: BoxDecoration(color: _color(widget.clip.type), borderRadius: BorderRadius.circular(TimelineConstants.clipRadius), border: Border.all(color: selected ? Colors.amber : Colors.transparent, width: 2)),
+          child: Stack(children: [Center(child: Text(_title(widget.clip.type), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600))), if (selected) const _TrimHandle(alignment: Alignment.centerLeft), if (selected) const _TrimHandle(alignment: Alignment.centerRight)]),
+        )),
       ),
     );
   }
+  Color _color(ClipType type) => switch (type) { ClipType.video => Colors.blue, ClipType.image => Colors.green, ClipType.text => Colors.orange, ClipType.audio => Colors.red, _ => Colors.purple };
+  String _title(ClipType type) => type.name.toUpperCase();
 }
+
+class _TrimHandle extends StatelessWidget { const _TrimHandle({required this.alignment}); final Alignment alignment; @override Widget build(BuildContext context) => Align(alignment: alignment, child: Container(width: 6, margin: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: Colors.white.withOpacity(.85), borderRadius: BorderRadius.circular(3)))); }
