@@ -6,4 +6,5 @@ enum ClipType {
   sticker,
   gif,
   lottie,
+  audio,
 }

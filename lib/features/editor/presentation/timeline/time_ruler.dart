@@ -6,9 +6,11 @@ class TimeRuler extends StatelessWidget {
   const TimeRuler({
     super.key,
     required this.duration,
+    required this.pixelsPerSecond,
   });
 
   final Duration duration;
+  final double pixelsPerSecond;
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +21,7 @@ class TimeRuler extends StatelessWidget {
       child: Row(
         children: List.generate(seconds, (index) {
           return SizedBox(
-            width: TimelineConstants.pixelsPerSecond,
+            width: pixelsPerSecond,
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(

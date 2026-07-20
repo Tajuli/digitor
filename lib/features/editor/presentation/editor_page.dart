@@ -1,11 +1,17 @@
 import 'dart:io';
 import 'package:digitor/features/editor/application/editor_controller.dart';
 import 'package:digitor/features/editor/application/timeline_provider.dart';
+import 'package:digitor/features/editor/application/project_controller.dart';
+import 'package:digitor/features/editor/application/timeline_controller.dart';
+import 'package:digitor/features/editor/application/video_clip.dart';
 import 'package:digitor/features/editor/application/video_thumbnail_generator.dart';
+import 'package:digitor/features/editor/domain/models/editor_project.dart';
 import 'package:digitor/features/editor/domain/models/media_item.dart';
+import 'package:digitor/features/editor/domain/models/timeline_track.dart';
+import 'package:digitor/features/editor/domain/models/track_type.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/widgets/preview_area.dart';
-import 'package:digitor/features/editor/presentation/widgets/timeline_widget.dart';
+import 'package:digitor/features/editor/presentation/timeline/timeline_view.dart';
 import 'package:flutter/material.dart';
 
 class EditorPage extends StatefulWidget {
@@ -23,6 +29,8 @@ class EditorPage extends StatefulWidget {
 class _EditorPageState extends State<EditorPage> {
   late final EditorController _controller;
   late final TimelineProvider _timelineProvider;
+  late final ProjectController _projectController;
+  late final TimelineController _timelineController;
 
   @override
   void initState() {
@@ -33,6 +41,11 @@ class _EditorPageState extends State<EditorPage> {
     _timelineProvider = TimelineProvider(
       generator: VideoThumbnailGenerator(),
     );
+    _projectController = ProjectController(project: EditorProject(
+      duration: widget.media.duration,
+      tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])],
+    ));
+    _timelineController = TimelineController(projectController: _projectController);
 
     _loadTimeline();
   }
@@ -52,6 +65,7 @@ class _EditorPageState extends State<EditorPage> {
 
     if (oldWidget.media != widget.media) {
       _controller.loadMedia(widget.media);
+      _projectController.updateProject(EditorProject(duration: widget.media.duration, tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])]));
       _loadTimeline();
     }
   }
@@ -59,6 +73,8 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void dispose() {
     _timelineProvider.dispose();
+    _timelineController.dispose();
+    _projectController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -131,24 +147,7 @@ class _EditorPageState extends State<EditorPage> {
                               ),
                             ),
                             const SizedBox(height: 16),
-                            ListenableBuilder(
-                              listenable: Listenable.merge([
-                                _controller,
-                                _timelineProvider,
-                              ]),
-                              builder: (context, _) {
-                                final session = _controller.session;
-
-                                if (session == null) {
-                                  return const SizedBox.shrink();
-                                }
-
-                                return TimelineWidget(
-                                  duration: session.trimEnd,
-                                  frames: _timelineProvider.frames,
-                                );
-                              },
-                            ),
+                            SizedBox(height: 220, child: TimelineView(controller: _projectController, timelineController: _timelineController)),
                             const SizedBox(height: 16),
                             const EditorToolbar(),
                           ],

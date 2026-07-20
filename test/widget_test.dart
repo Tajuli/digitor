@@ -53,7 +53,7 @@ void main() {
       expect(find.text(label), findsOneWidget);
     }
 
-    expect(find.text('Timeline'), findsOneWidget);
-    expect(find.text('coming soon'), findsOneWidget);
+    expect(find.text('Video 1'), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
   });
 }
