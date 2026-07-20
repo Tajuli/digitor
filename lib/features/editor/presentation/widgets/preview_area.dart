@@ -3,14 +3,17 @@ import 'dart:io';
 import 'package:digitor/features/editor/domain/models/editor_session.dart';
 import 'package:digitor/features/editor/presentation/widgets/video_preview.dart';
 import 'package:flutter/material.dart';
+import '../../application/playback_controller.dart';
 
 class PreviewArea extends StatelessWidget {
   const PreviewArea({
     super.key,
     required this.session,
+    required this.playbackController,
   });
 
   final EditorSession session;
+  final PlaybackController playbackController;
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +32,7 @@ class PreviewArea extends StatelessWidget {
         ),
         child: session.media.isVideo
             ? VideoPreview(
-                path: session.media.path,
+                playbackController: playbackController,
               )
             : _ImagePreview(
                 path: session.media.path,

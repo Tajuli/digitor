@@ -15,6 +15,8 @@ class TimelineClip {
 
     this.visible = true,
     this.locked = false,
+    this.sourceStart = Duration.zero,
+    this.sourceDuration,
 
     this.data = const {},
   });
@@ -39,6 +41,10 @@ class TimelineClip {
 
   final bool locked;
 
+  /// Offset into the original media.  It is zero for generated clips.
+  final Duration sourceStart;
+  final Duration? sourceDuration;
+
   final Map<String, dynamic> data;
 
   TimelineClip copyWith({
@@ -54,6 +60,8 @@ class TimelineClip {
 
     bool? visible,
     bool? locked,
+    Duration? sourceStart,
+    Duration? sourceDuration,
 
     Map<String, dynamic>? data,
   }) {
@@ -68,6 +76,8 @@ class TimelineClip {
       opacity: opacity ?? this.opacity,
       visible: visible ?? this.visible,
       locked: locked ?? this.locked,
+      sourceStart: sourceStart ?? this.sourceStart,
+      sourceDuration: sourceDuration ?? this.sourceDuration,
       data: data ?? this.data,
     );
   }
