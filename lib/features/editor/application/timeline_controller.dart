@@ -87,6 +87,18 @@ class TimelineController extends ChangeNotifier {
             (a - pixelsPerSecond).abs() < (b - pixelsPerSecond).abs() ? a : b),
       );
 
+  /// Import operations insert at the playhead (or zero in an empty project)
+  /// and create a single undo snapshot per completed picker action.
+  void addVideoWithLinkedAudio({required String trackId, required String path, required Duration duration, required bool hasAudio}) => _recordProjectMutation(() => projectController.addVideoWithLinkedAudio(videoTrackId: trackId, path: path, duration: duration, hasAudio: hasAudio, start: _position));
+  void addImageClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addImageClip(trackId: trackId, path: path, duration: duration, start: _position));
+  void addOverlayClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addOverlayClip(trackId: trackId, path: path, duration: duration, start: _position));
+  void addTextClip({required String trackId, required String text}) => _recordProjectMutation(() => projectController.addTextClip(trackId: trackId, text: text, start: _position));
+  void addAudioClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addAudioClip(trackId: trackId, path: path, duration: duration, start: _position));
+  void addVideoTrack() => _recordProjectMutation(projectController.addVideoTrack);
+  void addAudioTrack() => _recordProjectMutation(projectController.addAudioTrack);
+  void unlinkClipGroup(String clipId) => _recordProjectMutation(() => projectController.unlinkClipGroup(clipId));
+  void _recordProjectMutation(void Function() mutation) { final before = projectController.project; mutation(); final after = projectController.project; if (!identical(before, after)) history.record(ProjectSnapshotCommand(projectController, before, after)); }
+
   /// Moves a clip, optionally to another compatible track, after magnetic snap.
   void moveClip({required String clipId, required String fromTrackId, required String toTrackId, required Duration start, bool recordHistory = true}) {
     final source = _track(fromTrackId);
@@ -94,11 +106,19 @@ class TimelineController extends ChangeNotifier {
     if (source == null || destination == null || source.locked || destination.locked || !_accepts(destination, _clip(source, clipId))) return;
     final clip = _clip(source, clipId)!;
     if (clip.locked) return;
-    final moved = clip.copyWith(start: snap(start, excludingClipId: clipId));
+    final target = snap(start, excludingClipId: clipId);
+    final linked = projectController.getLinkedClips(clipId);
+    if (linked.any((item) => item.locked || _trackContaining(item.id)?.locked == true)) return;
+    final delta = target - clip.start;
+    final minimumStart = linked.fold<Duration>(clip.start, (minimum, item) => item.start < minimum ? item.start : minimum);
+    final adjustedTarget = target - (minimumStart + delta < Duration.zero ? minimumStart + delta : Duration.zero);
+    final adjustedDelta = adjustedTarget - clip.start;
+    final moved = clip.copyWith(start: adjustedTarget);
     final tracks = projectController.tracks.map((track) {
       if (track.id == fromTrackId && track.id == toTrackId) return track.copyWith(clips: track.clips.map((item) => item.id == clipId ? moved : item).toList());
       if (track.id == fromTrackId) return track.copyWith(clips: track.clips.where((item) => item.id != clipId).toList());
       if (track.id == toTrackId) return track.copyWith(clips: [...track.clips, moved]);
+      if (linked.any((item) => item.id != clipId && track.clips.any((existing) => existing.id == item.id))) return track.copyWith(clips: track.clips.map((item) => linked.any((linkedClip) => linkedClip.id == item.id) ? item.copyWith(start: item.start + adjustedDelta) : item).toList());
       return track;
     }).toList();
     _apply(projectController.project.copyWith(tracks: tracks), recordHistory ? MoveClipCommand(projectController, projectController.project, projectController.project.copyWith(tracks: tracks)) : null);
@@ -114,6 +134,25 @@ class TimelineController extends ChangeNotifier {
     if (track.locked || clip.locked) return;
     if (position <= clip.start || position >= clip.start + clip.duration) return;
 
+    final linked = projectController.getLinkedClips(clipId);
+    if (linked.length == 2 && linked.any((item) => item.locked || _trackContaining(item.id)?.locked == true)) return;
+    if (linked.length == 2) {
+      final firstGroup = projectController.newId('link');
+      final secondGroup = projectController.newId('link');
+      final replacements = <String, List<TimelineClip>>{};
+      for (final item in linked) {
+        final splitAt = item.start + (position - clip.start);
+        if (splitAt <= item.start || splitAt >= item.start + item.duration) return;
+        final firstDuration = splitAt - item.start;
+        replacements[item.id] = [
+          item.copyWith(duration: firstDuration, linkGroupId: firstGroup),
+          item.copyWith(id: _splitClipId(_trackContaining(item.id)!, item, splitAt), start: splitAt, duration: item.duration - firstDuration, sourceStart: item.sourceStart + firstDuration, linkGroupId: secondGroup),
+        ];
+      }
+      final after = projectController.project.copyWith(tracks: projectController.tracks.map((item) => item.copyWith(clips: item.clips.expand((existing) => replacements[existing.id] ?? [existing]).toList())).toList());
+      _apply(after, SplitClipCommand(projectController, projectController.project, after));
+      return;
+    }
     final firstDuration = position - clip.start;
     final second = clip.copyWith(
       id: _splitClipId(track, clip, position),
@@ -192,7 +231,19 @@ class TimelineController extends ChangeNotifier {
     final sourceDelta = newStart - clip.start;
     if (clip.sourceDuration != null && clip.sourceStart + sourceDelta + (newEnd - newStart) > clip.sourceDuration!) newEnd = clip.sourceDuration! - clip.sourceStart - sourceDelta + newStart;
     final trimmed = clip.copyWith(start: newStart, duration: newEnd - newStart, sourceStart: clip.sourceStart + sourceDelta);
-    final after = projectController.project.copyWith(tracks: projectController.tracks.map((t) => t.id == trackId ? t.copyWith(clips: t.clips.map((c) => c.id == clipId ? trimmed : c).toList()) : t).toList());
+    final linked = projectController.getLinkedClips(clipId);
+    if (linked.any((item) => item.locked || _trackContaining(item.id)?.locked == true)) return clip;
+    final replacements = <String, TimelineClip>{clipId: trimmed};
+    if (linked.length == 2) {
+      final startDelta = trimmed.start - clip.start;
+      final endDelta = (trimmed.start + trimmed.duration) - (clip.start + clip.duration);
+      for (final partner in linked.where((item) => item.id != clipId)) {
+        final partnerStart = partner.start + startDelta;
+        final partnerEnd = partner.start + partner.duration + endDelta;
+        replacements[partner.id] = partner.copyWith(start: partnerStart, duration: partnerEnd - partnerStart, sourceStart: partner.sourceStart + startDelta);
+      }
+    }
+    final after = projectController.project.copyWith(tracks: projectController.tracks.map((t) => t.copyWith(clips: t.clips.map((c) => replacements[c.id] ?? c).toList())).toList());
     _apply(after, recordHistory ? TrimClipCommand(projectController, projectController.project, after) : null); return trimmed;
   }
   void _apply(EditorProject after, EditorCommand? command) {
@@ -211,6 +262,7 @@ class TimelineController extends ChangeNotifier {
   }
 
   TimelineTrack? _track(String id) { for (final track in projectController.tracks) { if (track.id == id) return track; } return null; }
+  TimelineTrack? _trackContaining(String clipId) { for (final track in projectController.tracks) { if (track.clips.any((clip) => clip.id == clipId)) return track; } return null; }
   TimelineClip? _clip(TimelineTrack track, String id) { for (final clip in track.clips) { if (clip.id == id) return clip; } return null; }
   bool _accepts(TimelineTrack track, TimelineClip? clip) => clip != null && (track.type == TrackType.audio ? clip.type == ClipType.audio : clip.type != ClipType.audio);
 

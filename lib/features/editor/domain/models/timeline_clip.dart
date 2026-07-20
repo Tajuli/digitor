@@ -17,6 +17,7 @@ class TimelineClip {
     this.locked = false,
     this.sourceStart = Duration.zero,
     this.sourceDuration,
+    this.linkGroupId,
 
     this.data = const {},
   });
@@ -45,6 +46,11 @@ class TimelineClip {
   final Duration sourceStart;
   final Duration? sourceDuration;
 
+  /// Identifies the two clips created from the same imported video.  This is
+  /// deliberately typed data rather than an entry in [data], so linked edit
+  /// operations cannot be broken by unrelated clip metadata.
+  final String? linkGroupId;
+
   final Map<String, dynamic> data;
 
   TimelineClip copyWith({
@@ -62,6 +68,8 @@ class TimelineClip {
     bool? locked,
     Duration? sourceStart,
     Duration? sourceDuration,
+    String? linkGroupId,
+    bool clearLinkGroupId = false,
 
     Map<String, dynamic>? data,
   }) {
@@ -78,6 +86,7 @@ class TimelineClip {
       locked: locked ?? this.locked,
       sourceStart: sourceStart ?? this.sourceStart,
       sourceDuration: sourceDuration ?? this.sourceDuration,
+      linkGroupId: clearLinkGroupId ? null : linkGroupId ?? this.linkGroupId,
       data: data ?? this.data,
     );
   }

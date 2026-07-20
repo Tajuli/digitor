@@ -42,6 +42,27 @@ class PreviewArea extends StatelessWidget {
   }
 }
 
+class EmptyPreviewArea extends StatelessWidget {
+  const EmptyPreviewArea({super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      borderRadius: BorderRadius.circular(28),
+    ),
+    child: const Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.add_photo_alternate_outlined, size: 48),
+        SizedBox(height: 12),
+        Text('Add media to start editing'),
+      ]),
+    ),
+  );
+}
+
 class _ImagePreview extends StatelessWidget {
   const _ImagePreview({
     required this.path,
