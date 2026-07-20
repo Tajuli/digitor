@@ -1,4 +1,5 @@
 import 'package:digitor/features/editor/domain/models/clip_type.dart';
+import 'package:digitor/features/editor/domain/models/clip_adjustments.dart';
 import 'package:flutter/material.dart';
 
 class TimelineClip {
@@ -18,6 +19,11 @@ class TimelineClip {
     this.sourceStart = Duration.zero,
     this.sourceDuration,
     this.linkGroupId,
+    this.colorAdjustments = const ClipColorAdjustments(),
+    this.filter = ClipFilterType.none,
+    this.effect = ClipEffectType.none,
+    this.volume = 1,
+    this.muted = false,
 
     this.data = const {},
   });
@@ -50,6 +56,11 @@ class TimelineClip {
   /// deliberately typed data rather than an entry in [data], so linked edit
   /// operations cannot be broken by unrelated clip metadata.
   final String? linkGroupId;
+  final ClipColorAdjustments colorAdjustments;
+  final ClipFilterType filter;
+  final ClipEffectType effect;
+  final double volume;
+  final bool muted;
 
   final Map<String, dynamic> data;
 
@@ -70,6 +81,11 @@ class TimelineClip {
     Duration? sourceDuration,
     String? linkGroupId,
     bool clearLinkGroupId = false,
+    ClipColorAdjustments? colorAdjustments,
+    ClipFilterType? filter,
+    ClipEffectType? effect,
+    double? volume,
+    bool? muted,
 
     Map<String, dynamic>? data,
   }) {
@@ -87,6 +103,11 @@ class TimelineClip {
       sourceStart: sourceStart ?? this.sourceStart,
       sourceDuration: sourceDuration ?? this.sourceDuration,
       linkGroupId: clearLinkGroupId ? null : linkGroupId ?? this.linkGroupId,
+      colorAdjustments: colorAdjustments ?? this.colorAdjustments,
+      filter: filter ?? this.filter,
+      effect: effect ?? this.effect,
+      volume: volume ?? this.volume,
+      muted: muted ?? this.muted,
       data: data ?? this.data,
     );
   }

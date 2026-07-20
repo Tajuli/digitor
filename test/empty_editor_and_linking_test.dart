@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   ProjectController project() => ProjectController(
-        project: const EditorProject(
+        project: EditorProject(
           duration: Duration.zero,
           tracks: [
             TimelineTrack(id: 'video', name: 'Video 1', type: TrackType.video),

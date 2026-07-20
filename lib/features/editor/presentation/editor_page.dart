@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:digitor/features/editor/application/editor_controller.dart';
+import 'package:digitor/features/editor/application/editor_tool_controller.dart';
 import 'package:digitor/features/editor/application/timeline_provider.dart';
 import 'package:digitor/features/editor/application/project_controller.dart';
 import 'package:digitor/features/editor/application/timeline_controller.dart';
@@ -33,6 +34,7 @@ class _EditorPageState extends State<EditorPage> {
   late final ProjectController _projectController;
   late final TimelineController _timelineController;
   late final PlaybackController _playbackController;
+  late final EditorToolController _toolController;
 
   @override
   void initState() {
@@ -44,7 +46,7 @@ class _EditorPageState extends State<EditorPage> {
     _timelineProvider = TimelineProvider(
       generator: VideoThumbnailGenerator(),
     );
-    _projectController = ProjectController(project: const EditorProject(
+    _projectController = ProjectController(project: EditorProject(
       duration: Duration.zero,
       tracks: [
         TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video),
@@ -53,6 +55,7 @@ class _EditorPageState extends State<EditorPage> {
     ));
     _timelineController = TimelineController(projectController: _projectController);
     _playbackController = PlaybackController();
+    _toolController = EditorToolController();
 
     if (widget.media != null) {
       _controller.loadMedia(widget.media!);
@@ -88,6 +91,7 @@ class _EditorPageState extends State<EditorPage> {
     _timelineProvider.dispose();
     _timelineController.dispose();
     _playbackController.dispose();
+    _toolController.dispose();
     _projectController.dispose();
     _controller.dispose();
     super.dispose();
@@ -158,8 +162,8 @@ class _EditorPageState extends State<EditorPage> {
                             ),
                             const SizedBox(height: 16),
                             SizedBox(height: 220, child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController)),
-                            const SizedBox(height: 16),
-                            const EditorToolbar(),
+                            const SizedBox(height: 8),
+                            SizedBox(height: 128, child: EditorToolbar(tools: _toolController, project: _projectController, timeline: _timelineController)),
                           ],
                         ),
                       ),

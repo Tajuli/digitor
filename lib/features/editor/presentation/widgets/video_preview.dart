@@ -16,6 +16,7 @@ class VideoPreview extends StatelessWidget {
       if (playbackController.error != null) return Center(child: Text(playbackController.error!));
       final controller = playbackController.videoController;
       if (controller == null || !controller.value.isInitialized) return const Center(child: CircularProgressIndicator());
+      final ended = playbackController.duration > Duration.zero && playbackController.position >= playbackController.duration;
       return Stack(
         alignment: Alignment.center,
         children: [
@@ -29,24 +30,11 @@ class VideoPreview extends StatelessWidget {
               ),
             ),
           ),
-          Container(
-            decoration: const BoxDecoration(
-              color: Colors.black38,
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              iconSize: 56,
-              color: Colors.white,
-              icon: Icon(
-                playbackController.isPlaying
-                    ? Icons.pause
-                    : Icons.play_arrow,
-              ),
-              onPressed: playbackController.toggle,
-            ),
-          ),
+          Positioned(bottom: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(24)), child: Row(mainAxisSize: MainAxisSize.min, children: [IconButton(tooltip: playbackController.isPlaying ? 'Pause' : (ended ? 'Replay' : 'Play'), iconSize: 30, color: Colors.white, icon: Icon(playbackController.isPlaying ? Icons.pause : (ended ? Icons.replay : Icons.play_arrow)), onPressed: () async { if (ended) await playbackController.seek(Duration.zero); await playbackController.toggle(); }), Text('${_time(playbackController.position)} / ${_time(playbackController.duration)}', style: const TextStyle(color: Colors.white))]))),
         ],
       );
     });
   }
+
+  String _time(Duration value) => '${value.inMinutes.remainder(60).toString().padLeft(2, '0')}:${value.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 }

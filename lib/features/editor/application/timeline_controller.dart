@@ -96,7 +96,16 @@ class TimelineController extends ChangeNotifier {
   void addAudioClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addAudioClip(trackId: trackId, path: path, duration: duration, start: _position));
   void addVideoTrack() => _recordProjectMutation(projectController.addVideoTrack);
   void addAudioTrack() => _recordProjectMutation(projectController.addAudioTrack);
-  void unlinkClipGroup(String clipId) => _recordProjectMutation(() => projectController.unlinkClipGroup(clipId));
+  void unlinkClipGroup(String clipId) { final group = projectController.getLinkedClips(clipId).firstOrNull?.linkGroupId; if (group != null) _recordProjectMutation(() => projectController.unlinkClipGroup(group)); }
+  void updateClip(TimelineClip replacement) => _recordProjectMutation(() {
+        final track = _trackContaining(replacement.id);
+        if (track != null) projectController.updateClip(trackId: track.id, clip: replacement);
+      });
+  void deleteSelectedClip() {
+    final clip = projectController.selectedClip;
+    final track = clip == null ? null : _trackContaining(clip.id);
+    if (clip != null && track != null) _recordProjectMutation(() => projectController.removeClip(trackId: track.id, clipId: clip.id));
+  }
   void _recordProjectMutation(void Function() mutation) { final before = projectController.project; mutation(); final after = projectController.project; if (!identical(before, after)) history.record(ProjectSnapshotCommand(projectController, before, after)); }
 
   /// Moves a clip, optionally to another compatible track, after magnetic snap.

@@ -43,16 +43,13 @@ void main() {
     expect(find.text('Editor'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
     expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
-    expect(find.text('Video Preview'), findsOneWidget);
-    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
     for (final label in [
-      'Trim',
-      'Text',
+      'Edit',
+      'Color',
       'Filter',
-      'Adjust',
-      'Crop',
-      'Sticker',
+      'Effect',
       'Audio',
       'Export',
     ]) {
@@ -80,7 +77,7 @@ void main() {
 
   testWidgets('TimelineView builds with scroll direction notifications', (tester) async {
     final projectController = ProjectController(
-      project: const EditorProject(
+      project: EditorProject(
         duration: Duration(seconds: 10),
         tracks: [],
       ),
