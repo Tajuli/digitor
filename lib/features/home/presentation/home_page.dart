@@ -80,7 +80,9 @@ class HomePage extends StatelessWidget {
   ) async {
     switch (type) {
       case _HomeActionType.videoEditor:
-        await _pickAndOpenEditor(context, isVideo: true);
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const EditorPage()),
+        );
         break;
       case _HomeActionType.imageEditor:
         await _pickAndOpenEditor(context, isVideo: false);

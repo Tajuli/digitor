@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../application/project_controller.dart';
 import '../../application/timeline_controller.dart';
@@ -33,13 +34,13 @@ class _ClipWidgetState extends State<ClipWidget> {
       top: (TimelineConstants.trackHeight - TimelineConstants.clipHeight) / 2,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => widget.controller.selectClip(trackId: widget.trackId, clipId: widget.clip.id),
-        onHorizontalDragUpdate: widget.clip.locked || widget.trackLocked ? null : (details) => setState(() { _displayStart += TimelineMath.pixelsToDuration(details.delta.dx, widget.pixelsPerSecond); if (_displayStart < Duration.zero) _displayStart = Duration.zero; }),
-        onHorizontalDragEnd: widget.clip.locked || widget.trackLocked ? null : (details) => widget.onMoveEnd(widget.clip.id, widget.trackId, _displayStart, details.globalPosition),
+        onLongPress: widget.clip.locked || widget.trackLocked ? null : () { HapticFeedback.selectionClick(); widget.controller.selectClip(trackId: widget.trackId, clipId: widget.clip.id); },
+        onHorizontalDragUpdate: !selected || widget.clip.locked || widget.trackLocked ? null : (details) => setState(() { _displayStart += TimelineMath.pixelsToDuration(details.delta.dx, widget.pixelsPerSecond); if (_displayStart < Duration.zero) _displayStart = Duration.zero; }),
+        onHorizontalDragEnd: !selected || widget.clip.locked || widget.trackLocked ? null : (details) => widget.onMoveEnd(widget.clip.id, widget.trackId, _displayStart, details.globalPosition),
         child: RepaintBoundary(child: AnimatedContainer(
           duration: TimelineConstants.movementAnimationDuration, width: width, height: TimelineConstants.clipHeight,
           decoration: BoxDecoration(color: _color(widget.clip.type), borderRadius: BorderRadius.circular(TimelineConstants.clipRadius), border: Border.all(color: selected ? Colors.amber : Colors.transparent, width: 2)),
-          child: Stack(children: [Center(child: Text(_title(widget.clip.type), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600))), if (selected && !widget.clip.locked && !widget.trackLocked) _TrimHandle(alignment: Alignment.centerLeft, onDelta: (dx) => _trimLeft(dx)), if (selected && !widget.clip.locked && !widget.trackLocked) _TrimHandle(alignment: Alignment.centerRight, onDelta: (dx) => _trimRight(dx))]),
+          child: Stack(children: [Center(child: Text(_title(widget.clip.type), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600))), if (widget.clip.linkGroupId != null) const Positioned(right: 4, top: 3, child: Icon(Icons.link, color: Colors.white, size: 13)), if (selected && !widget.clip.locked && !widget.trackLocked) _TrimHandle(alignment: Alignment.centerLeft, onDelta: (dx) => _trimLeft(dx)), if (selected && !widget.clip.locked && !widget.trackLocked) _TrimHandle(alignment: Alignment.centerRight, onDelta: (dx) => _trimRight(dx))]),
         )),
       ),
     );

@@ -18,10 +18,10 @@ import 'package:flutter/material.dart';
 class EditorPage extends StatefulWidget {
   const EditorPage({
     super.key,
-    required this.media,
+    this.media,
   });
 
-  final MediaItem media;
+  final MediaItem? media;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -38,27 +38,37 @@ class _EditorPageState extends State<EditorPage> {
   void initState() {
     super.initState();
 
-    _controller = EditorController()..loadMedia(widget.media);
+    _controller = EditorController();
+    if (widget.media != null) _controller.loadMedia(widget.media!);
 
     _timelineProvider = TimelineProvider(
       generator: VideoThumbnailGenerator(),
     );
-    _projectController = ProjectController(project: EditorProject(
-      duration: widget.media.duration,
-      tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])],
+    _projectController = ProjectController(project: const EditorProject(
+      duration: Duration.zero,
+      tracks: [
+        TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video),
+        TimelineTrack(id: 'primary-audio', name: 'Audio 1', type: TrackType.audio),
+      ],
     ));
     _timelineController = TimelineController(projectController: _projectController);
-    _playbackController = PlaybackController()..replaceMedia(widget.media.path);
+    _playbackController = PlaybackController();
+
+    if (widget.media != null) {
+      _controller.loadMedia(widget.media!);
+      _projectController.addVideoWithLinkedAudio(videoTrackId: 'primary-video', path: widget.media!.path, duration: widget.media!.duration, hasAudio: false);
+      _playbackController.replaceMedia(widget.media!.path);
+    }
 
     _loadTimeline();
   }
 
   Future<void> _loadTimeline() async {
-    if (!widget.media.isVideo) return;
+    if (widget.media == null || !widget.media!.isVideo) return;
 
     await _timelineProvider.loadVideo(
-      video: File(widget.media.path),
-      duration: widget.media.duration,
+      video: File(widget.media!.path),
+      duration: widget.media!.duration,
     );
   }
 
@@ -66,11 +76,10 @@ class _EditorPageState extends State<EditorPage> {
   void didUpdateWidget(covariant EditorPage oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.media != widget.media) {
-      _controller.loadMedia(widget.media);
-      _projectController.updateProject(EditorProject(duration: widget.media.duration, tracks: [TimelineTrack(id: 'primary-video', name: 'Video 1', type: TrackType.video, clips: [VideoClip(id: widget.media.id, path: widget.media.path, start: Duration.zero, duration: widget.media.duration)])]));
+    if (oldWidget.media != widget.media && widget.media != null) {
+      _controller.loadMedia(widget.media!);
       _loadTimeline();
-      _playbackController.replaceMedia(widget.media.path);
+      _playbackController.replaceMedia(widget.media!.path);
     }
   }
 
@@ -137,15 +146,11 @@ class _EditorPageState extends State<EditorPage> {
                             Expanded(
                               flex: 5,
                               child: ListenableBuilder(
-                                listenable: _controller,
+                                listenable: Listenable.merge([_controller, _projectController]),
                                 builder: (context, _) {
                                   final session = _controller.session;
 
-                                  if (session == null) {
-                                    return const Center(
-                                      child: CircularProgressIndicator(),
-                                    );
-                                  }
+                                  if (session == null || !_projectController.hasClips) return const EmptyPreviewArea();
 
                                   return PreviewArea(session: session, playbackController: _playbackController);
                                 },
