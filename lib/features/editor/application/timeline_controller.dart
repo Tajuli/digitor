@@ -106,22 +106,78 @@ class TimelineController extends ChangeNotifier {
 
   /// Splits a clip at [position], preserving the original clip's metadata.
   void splitClip({required String trackId, required String clipId, required Duration position}) {
-    final track = _track(trackId); final clip = track == null ? null : _clip(track, clipId);
-    if (clip == null || track.locked || clip.locked || position <= clip.start || position >= clip.start + clip.duration) return;
+    final track = _track(trackId);
+    if (track == null) return;
+
+    final clip = _clip(track, clipId);
+    if (clip == null) return;
+    if (track.locked || clip.locked) return;
+    if (position <= clip.start || position >= clip.start + clip.duration) return;
+
     final firstDuration = position - clip.start;
-    final second = clip.copyWith(id: '${clip.id}_${position.inMilliseconds}', start: position, duration: clip.duration - firstDuration);
-    final tracks = projectController.tracks.map((item) => item.id == trackId ? item.copyWith(clips: [...item.clips.where((c) => c.id != clipId), clip.copyWith(duration: firstDuration), second]) : item).toList();
-    final after = projectController.project.copyWith(tracks: tracks); _apply(after, SplitClipCommand(projectController, projectController.project, after));
+    final second = clip.copyWith(
+      id: _splitClipId(track, clip, position),
+      start: position,
+      duration: clip.duration - firstDuration,
+      sourceStart: clip.sourceStart + firstDuration,
+    );
+    final tracks = projectController.tracks
+        .map(
+          (item) => item.id == trackId
+              ? item.copyWith(
+                  clips: [
+                    ...item.clips.where((clip) => clip.id != clipId),
+                    clip.copyWith(duration: firstDuration),
+                    second,
+                  ],
+                )
+              : item,
+        )
+        .toList();
+    final after = projectController.project.copyWith(tracks: tracks);
+    _apply(after, SplitClipCommand(projectController, projectController.project, after));
   }
 
   /// Moves a clip and shifts following clips on its source track by the delta.
   void rippleMove({required String trackId, required String clipId, required Duration start}) {
-    final track = _track(trackId); final clip = track == null ? null : _clip(track, clipId);
-    if (clip == null || track.locked || clip.locked) return;
+    final track = _track(trackId);
+    if (track == null) return;
+
+    final clip = _clip(track, clipId);
+    if (clip == null) return;
+    if (track.locked || clip.locked) return;
+
     final target = snap(start, excludingClipId: clipId);
     final delta = target - clip.start;
-    final updated = track.copyWith(clips: track.clips.map((item) => item.id == clipId ? item.copyWith(start: target) : item.start >= clip.start ? item.copyWith(start: item.start + delta) : item).toList());
-    final after = projectController.project.copyWith(tracks: projectController.tracks.map((item) => item.id == trackId ? updated : item).toList()); _apply(after, RippleMoveCommand(projectController, projectController.project, after));
+    final updated = track.copyWith(
+      clips: track.clips
+          .map(
+            (item) => item.id == clipId
+                ? item.copyWith(start: target)
+                : item.start >= clip.start
+                    ? item.copyWith(start: item.start + delta)
+                    : item,
+          )
+          .toList(),
+    );
+    final after = projectController.project.copyWith(
+      tracks: projectController.tracks
+          .map((item) => item.id == trackId ? updated : item)
+          .toList(),
+    );
+    _apply(after, RippleMoveCommand(projectController, projectController.project, after));
+  }
+
+  String _splitClipId(TimelineTrack track, TimelineClip clip, Duration position) {
+    final baseId = '${clip.id}_${position.inMilliseconds}';
+    final existingIds = track.clips.map((item) => item.id).toSet();
+    if (!existingIds.contains(baseId)) return baseId;
+
+    var suffix = 1;
+    while (existingIds.contains('${baseId}_$suffix')) {
+      suffix++;
+    }
+    return '${baseId}_$suffix';
   }
 
   /// Returns a trimmed immutable clip, preserving the source offset for media.

@@ -32,4 +32,154 @@ void main() {
     expect(project.tracks.single.clips.single.sourceStart, const Duration(seconds: 1));
     controller.dispose(); project.dispose();
   });
+
+  group('TimelineController splitClip', () {
+    test('returns safely when the track or clip is missing', () {
+      final project = _projectWithClips([_clip('clip', Duration.zero)]);
+      final controller = TimelineController(projectController: project);
+
+      controller.splitClip(
+        trackId: 'missing',
+        clipId: 'clip',
+        position: const Duration(seconds: 2),
+      );
+      controller.splitClip(
+        trackId: 'video',
+        clipId: 'missing',
+        position: const Duration(seconds: 2),
+      );
+
+      expect(project.tracks.single.clips, hasLength(1));
+      controller.dispose();
+      project.dispose();
+    });
+
+    test('respects a locked track', () {
+      final project = _projectWithClips([_clip('clip', Duration.zero)], locked: true);
+      final controller = TimelineController(projectController: project);
+
+      controller.splitClip(
+        trackId: 'video',
+        clipId: 'clip',
+        position: const Duration(seconds: 2),
+      );
+
+      expect(project.tracks.single.clips, hasLength(1));
+      controller.dispose();
+      project.dispose();
+    });
+
+    test('preserves the second clip source start', () {
+      final project = _projectWithClips([
+        TimelineClip(
+          id: 'clip',
+          type: ClipType.video,
+          start: const Duration(seconds: 1),
+          duration: const Duration(seconds: 6),
+          sourceStart: const Duration(seconds: 4),
+          sourceDuration: const Duration(seconds: 20),
+        ),
+      ]);
+      final controller = TimelineController(projectController: project);
+
+      controller.splitClip(
+        trackId: 'video',
+        clipId: 'clip',
+        position: const Duration(seconds: 3),
+      );
+
+      final second = project.tracks.single.clips.singleWhere(
+        (clip) => clip.id != 'clip',
+      );
+      expect(second.sourceStart, const Duration(seconds: 6));
+      controller.dispose();
+      project.dispose();
+    });
+  });
+
+  group('TimelineController rippleMove', () {
+    test('returns safely when the track is missing', () {
+      final project = _projectWithClips([_clip('clip', Duration.zero)]);
+      final controller = TimelineController(projectController: project);
+
+      controller.rippleMove(
+        trackId: 'missing',
+        clipId: 'clip',
+        start: const Duration(seconds: 2),
+      );
+
+      expect(project.tracks.single.clips.single.start, Duration.zero);
+      controller.dispose();
+      project.dispose();
+    });
+
+    test('respects a locked track', () {
+      final project = _projectWithClips([_clip('clip', Duration.zero)], locked: true);
+      final controller = TimelineController(projectController: project);
+
+      controller.rippleMove(
+        trackId: 'video',
+        clipId: 'clip',
+        start: const Duration(seconds: 2),
+      );
+
+      expect(project.tracks.single.clips.single.start, Duration.zero);
+      controller.dispose();
+      project.dispose();
+    });
+
+    test('moves the clip and shifts only following clips', () {
+      final project = _projectWithClips([
+        _clip('before', Duration.zero),
+        _clip('moved', const Duration(seconds: 2)),
+        _clip('following', const Duration(seconds: 5)),
+      ]);
+      final controller = TimelineController(projectController: project);
+
+      controller.rippleMove(
+        trackId: 'video',
+        clipId: 'moved',
+        start: const Duration(seconds: 3),
+      );
+
+      final clips = project.tracks.single.clips;
+      expect(clips.singleWhere((clip) => clip.id == 'before').start, Duration.zero);
+      expect(
+        clips.singleWhere((clip) => clip.id == 'moved').start,
+        const Duration(seconds: 3),
+      );
+      expect(
+        clips.singleWhere((clip) => clip.id == 'following').start,
+        const Duration(seconds: 6),
+      );
+      controller.dispose();
+      project.dispose();
+    });
+  });
+}
+
+ProjectController _projectWithClips(List<TimelineClip> clips, {bool locked = false}) {
+  return ProjectController(
+    project: EditorProject(
+      duration: const Duration(seconds: 20),
+      tracks: [
+        TimelineTrack(
+          id: 'video',
+          name: 'Video',
+          type: TrackType.video,
+          locked: locked,
+          clips: clips,
+        ),
+      ],
+    ),
+  );
+}
+
+TimelineClip _clip(String id, Duration start) {
+  return TimelineClip(
+    id: id,
+    type: ClipType.video,
+    start: start,
+    duration: const Duration(seconds: 1),
+  );
 }
