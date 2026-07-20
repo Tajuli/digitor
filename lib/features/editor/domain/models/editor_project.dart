@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 class EditorProject {
   EditorProject({
-    required this.tracks,
+    required List<TimelineTrack> tracks,
     required this.duration,
 
     this.fps = 30,
