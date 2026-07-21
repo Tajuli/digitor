@@ -19,6 +19,9 @@ class TimelineClip {
     this.sourceStart = Duration.zero,
     this.sourceDuration,
     this.linkGroupId,
+    this.sourceMediaGroupId,
+    this.isEmbeddedAudio = false,
+    this.colorGroupId,
     this.colorAdjustments = const ClipColorAdjustments(),
     this.filter = ClipFilterType.none,
     this.effect = ClipEffectType.none,
@@ -56,6 +59,10 @@ class TimelineClip {
   /// deliberately typed data rather than an entry in [data], so linked edit
   /// operations cannot be broken by unrelated clip metadata.
   final String? linkGroupId;
+  /// Stable media-origin identity. It is intentionally independent of linking.
+  final String? sourceMediaGroupId;
+  final bool isEmbeddedAudio;
+  final String? colorGroupId;
   final ClipColorAdjustments colorAdjustments;
   final ClipFilterType filter;
   final ClipEffectType effect;
@@ -81,6 +88,9 @@ class TimelineClip {
     Duration? sourceDuration,
     String? linkGroupId,
     bool clearLinkGroupId = false,
+    String? sourceMediaGroupId,
+    bool? isEmbeddedAudio,
+    String? colorGroupId,
     ClipColorAdjustments? colorAdjustments,
     ClipFilterType? filter,
     ClipEffectType? effect,
@@ -103,6 +113,9 @@ class TimelineClip {
       sourceStart: sourceStart ?? this.sourceStart,
       sourceDuration: sourceDuration ?? this.sourceDuration,
       linkGroupId: clearLinkGroupId ? null : linkGroupId ?? this.linkGroupId,
+      sourceMediaGroupId: sourceMediaGroupId ?? this.sourceMediaGroupId,
+      isEmbeddedAudio: isEmbeddedAudio ?? this.isEmbeddedAudio,
+      colorGroupId: colorGroupId ?? this.colorGroupId,
       colorAdjustments: colorAdjustments ?? this.colorAdjustments,
       filter: filter ?? this.filter,
       effect: effect ?? this.effect,
