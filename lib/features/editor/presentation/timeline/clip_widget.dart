@@ -62,13 +62,25 @@ class _ClipWidgetState extends State<ClipWidget> {
         child: RepaintBoundary(child: AnimatedContainer(
           duration: _dragging ? Duration.zero : TimelineConstants.movementAnimationDuration,
           width: width, height: TimelineConstants.clipHeight,
-          decoration: BoxDecoration(color: _color(widget.clip.type), borderRadius: BorderRadius.circular(TimelineConstants.clipRadius), border: Border.all(color: selected ? Colors.amberAccent : Colors.transparent, width: 2)),
+          decoration: BoxDecoration(color: _color(widget.clip), borderRadius: BorderRadius.circular(TimelineConstants.clipRadius), border: Border.all(color: selected ? Colors.amberAccent : Colors.transparent, width: 2)),
           child: Stack(children: [Center(child: Text(_title(widget.clip.type), overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600))), if (widget.clip.linkGroupId != null) const Positioned(right: 4, top: 3, child: Icon(Icons.link, color: Colors.white, size: 13)), if (selected && _editable) _TrimHandle(alignment: Alignment.centerLeft, onDelta: _trimLeft), if (selected && _editable) _TrimHandle(alignment: Alignment.centerRight, onDelta: _trimRight)]),
         )),
       ),
     );
   }
-  Color _color(ClipType type) => switch (type) { ClipType.video => Colors.blue, ClipType.image => Colors.green, ClipType.text => Colors.orange, ClipType.audio => Colors.red, _ => Colors.purple };
+  Color _color(TimelineClip clip) {
+    final group = clip.colorGroupId;
+    if (group != null && group != 'standalone-audio') {
+      return HSLColor.fromAHSL(1, group.hashCode.abs() % 360, .62, .42).toColor();
+    }
+    return switch (clip.type) {
+      ClipType.video => Colors.blue,
+      ClipType.image => Colors.green,
+      ClipType.text => Colors.orange,
+      ClipType.audio => Colors.deepPurple,
+      _ => Colors.purple,
+    };
+  }
   String _title(ClipType type) => type.name.toUpperCase();
   void _trimLeft(double dx) => widget.timelineController.trimClip(trackId: widget.trackId, clipId: widget.clip.id, start: widget.clip.start + TimelineMath.pixelsToDuration(dx, widget.pixelsPerSecond), end: widget.clip.start + widget.clip.duration, recordHistory: false);
   void _trimRight(double dx) => widget.timelineController.trimClip(trackId: widget.trackId, clipId: widget.clip.id, start: widget.clip.start, end: widget.clip.start + widget.clip.duration + TimelineMath.pixelsToDuration(dx, widget.pixelsPerSecond), recordHistory: false);

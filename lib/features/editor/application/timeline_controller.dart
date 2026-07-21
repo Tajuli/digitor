@@ -143,7 +143,9 @@ class TimelineController extends ChangeNotifier {
 
   /// Import operations insert at the playhead (or zero in an empty project)
   /// and create a single undo snapshot per completed picker action.
-  Duration get insertionPosition => snap(_position);
+  /// Imports use the canonical playhead exactly; snapping here would silently
+  /// change the user-selected insertion time.
+  Duration get insertionPosition => _position;
   void addVideoWithLinkedAudio({required String trackId, required String path, required Duration duration, required bool hasAudio}) => _recordProjectMutation(() => projectController.addVideoWithLinkedAudio(videoTrackId: trackId, path: path, duration: duration, hasAudio: hasAudio, start: insertionPosition));
   void addImageClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addImageClip(trackId: trackId, path: path, duration: duration, start: insertionPosition));
   void addOverlayClip({required String trackId, required String path, required Duration duration}) => _recordProjectMutation(() => projectController.addOverlayClip(trackId: trackId, path: path, duration: duration, start: insertionPosition));
@@ -152,6 +154,8 @@ class TimelineController extends ChangeNotifier {
   void addVideoTrack() => _recordProjectMutation(projectController.addVideoTrack);
   void addAudioTrack() => _recordProjectMutation(projectController.addAudioTrack);
   void unlinkClipGroup(String clipId) { final group = projectController.getLinkedClips(clipId).firstOrNull?.linkGroupId; if (group != null) _recordProjectMutation(() => projectController.unlinkClipGroup(group)); }
+  void linkClips({required String firstClipId, required String secondClipId}) =>
+      _recordProjectMutation(() => projectController.linkClips(firstClipId: firstClipId, secondClipId: secondClipId));
   void updateClip(TimelineClip replacement) => _recordProjectMutation(() {
         final track = _trackContaining(replacement.id);
         if (track != null) projectController.updateClip(trackId: track.id, clip: replacement);
@@ -217,14 +221,14 @@ class TimelineController extends ChangeNotifier {
     if (position <= clip.start || position >= clip.start + clip.duration) return;
 
     final linked = projectController.getLinkedClips(clipId);
-    if (linked.length == 2 && linked.any((item) => item.locked || _trackContaining(item.id)?.locked == true)) return;
-    if (linked.length == 2) {
+    if (linked.any((item) => item.locked || _trackContaining(item.id)?.locked == true)) return;
+    final intersected = linked.where((item) => position > item.start && position < item.start + item.duration).toList();
+    if (intersected.length > 1) {
       final firstGroup = projectController.newId('link');
       final secondGroup = projectController.newId('link');
       final replacements = <String, List<TimelineClip>>{};
-      for (final item in linked) {
-        final splitAt = item.start + (position - clip.start);
-        if (splitAt <= item.start || splitAt >= item.start + item.duration) return;
+      for (final item in intersected) {
+        final splitAt = position;
         final firstDuration = splitAt - item.start;
         replacements[item.id] = [
           item.copyWith(duration: firstDuration, linkGroupId: firstGroup),
@@ -323,7 +327,12 @@ class TimelineController extends ChangeNotifier {
       for (final partner in linked.where((item) => item.id != clipId)) {
         final partnerStart = partner.start + startDelta;
         final partnerEnd = partner.start + partner.duration + endDelta;
-        replacements[partner.id] = partner.copyWith(start: partnerStart, duration: partnerEnd - partnerStart, sourceStart: partner.sourceStart + startDelta);
+        // Only propagate an edge when that global edge remains a valid trim
+        // for this member. Linked clips may have unrelated offsets/lengths.
+        if (partnerStart >= Duration.zero && partnerEnd > partnerStart &&
+            (partner.sourceDuration == null || partner.sourceStart + startDelta >= Duration.zero && partner.sourceStart + startDelta + (partnerEnd - partnerStart) <= partner.sourceDuration!)) {
+          replacements[partner.id] = partner.copyWith(start: partnerStart, duration: partnerEnd - partnerStart, sourceStart: partner.sourceStart + startDelta);
+        }
       }
     }
     final after = projectController.project.copyWith(tracks: projectController.tracks.map((t) => t.copyWith(clips: t.clips.map((c) => replacements[c.id] ?? c).toList())).toList());

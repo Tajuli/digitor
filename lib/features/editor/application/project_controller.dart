@@ -90,7 +90,29 @@ class ProjectController extends ChangeNotifier {
   TimelineClip addImageClip({required String trackId, required String path, required Duration duration, Duration start = Duration.zero}) => _addTypedClip(trackId, ClipType.image, path: path, duration: duration, start: start);
   TimelineClip addTextClip({required String trackId, required String text, Duration duration = const Duration(seconds: 3), Duration start = Duration.zero}) => _addTypedClip(trackId, ClipType.text, duration: duration, start: start, data: {'text': text});
   TimelineClip addOverlayClip({required String trackId, required String path, required Duration duration, Duration start = Duration.zero}) => _addTypedClip(trackId, ClipType.overlay, path: path, duration: duration, start: start);
-  TimelineClip addAudioClip({required String trackId, required String path, required Duration duration, Duration start = Duration.zero}) => _addTypedClip(trackId, ClipType.audio, path: path, duration: duration, start: start);
+  /// Adds independently imported audio without changing its requested timeline
+  /// position. If the preferred track is busy, another compatible track is
+  /// selected (or created); existing clips are never moved to make room.
+  TimelineClip addAudioClip({required String trackId, required String path, required Duration duration, Duration start = Duration.zero}) {
+    final end = start + duration;
+    final preferred = tracks.where((track) => track.id == trackId).firstOrNull;
+    final audioTracks = tracks.where((track) => track.type == TrackType.audio && !track.locked);
+    final destination = preferred != null && preferred.type == TrackType.audio && !preferred.locked && !_overlaps(preferred, start, end)
+        ? preferred
+        : audioTracks.where((track) => !_overlaps(track, start, end)).firstOrNull ?? _addTrack(TrackType.audio);
+    final clip = TimelineClip(
+      id: newId('audio'), type: ClipType.audio, start: start, duration: duration,
+      sourceDuration: duration, sourceMediaGroupId: newId('media'),
+      colorGroupId: 'standalone-audio', data: {'path': path},
+    );
+    if (!addClip(trackId: destination.id, clip: clip)) {
+      throw StateError('Unable to place audio on an unlocked audio track.');
+    }
+    return clip;
+  }
+
+  bool _overlaps(TimelineTrack track, Duration start, Duration end) =>
+      track.clips.any((clip) => clip.start < end && start < clip.start + clip.duration);
   TimelineClip _addTypedClip(String trackId, ClipType type, {String? path, required Duration duration, required Duration start, Map<String, dynamic> data = const {}}) {
     final clip = TimelineClip(id: newId(type.name), type: type, start: start, duration: duration, sourceDuration: duration, data: {...data, if (path != null) 'path': path});
     if (!addClip(trackId: trackId, clip: clip)) throw ArgumentError('Track does not accept ${type.name} clips.');
@@ -111,12 +133,15 @@ class ProjectController extends ChangeNotifier {
     required bool hasAudio,
     Duration start = Duration.zero,
   }) {
+    final origin = newId('media');
     final video = TimelineClip(
       id: newId('video'),
       type: ClipType.video,
       start: start,
       duration: duration,
       sourceDuration: duration,
+      sourceMediaGroupId: origin,
+      colorGroupId: origin,
       data: {'path': path},
     );
 
@@ -161,6 +186,9 @@ class ProjectController extends ChangeNotifier {
       duration: duration,
       sourceDuration: duration,
       linkGroupId: group,
+      sourceMediaGroupId: origin,
+      isEmbeddedAudio: true,
+      colorGroupId: origin,
       data: {'path': path},
     );
 
@@ -335,8 +363,20 @@ class ProjectController extends ChangeNotifier {
   }
   bool isLinked(String clipId) => getLinkedClips(clipId).length > 1;
   void linkClips({required String firstClipId, required String secondClipId}) {
-    final clips = tracks.expand((track) => track.clips).where((clip) => clip.id == firstClipId || clip.id == secondClipId).toList();
-    if (clips.length != 2 || clips[0].type == clips[1].type) throw ArgumentError('Link one visual clip and one audio clip.');
+    if (firstClipId == secondClipId) {
+      throw ArgumentError('Cannot link a clip to itself.');
+    }
+    final clips = tracks
+        .expand((track) => track.clips)
+        .where((clip) => clip.id == firstClipId || clip.id == secondClipId)
+        .toList();
+    final hasAudio = clips.any((clip) => clip.type == ClipType.audio);
+    final hasVisual = clips.any((clip) => clip.type != ClipType.audio);
+    if (clips.length != 2 || !hasAudio || !hasVisual ||
+        clips.any((clip) => clip.locked || _trackFor(clip.id)?.locked == true) ||
+        clips.any((clip) => clip.linkGroupId != null)) {
+      throw ArgumentError('Select two unlocked, unlinked visual and audio clips.');
+    }
     final group = newId('link');
     _replaceClips({for (final clip in clips) clip.id: clip.copyWith(linkGroupId: group)});
   }

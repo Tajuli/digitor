@@ -46,6 +46,57 @@ void main() {
     controller.dispose(); project.dispose();
   });
 
+  group('standalone audio insertion', () {
+    test('uses the exact playhead, full duration, and an available audio track', () {
+      final occupied = TimelineClip(
+        id: 'occupied', type: ClipType.audio, start: const Duration(seconds: 4),
+        duration: const Duration(seconds: 8),
+      );
+      final project = ProjectController(project: EditorProject(
+        duration: const Duration(seconds: 12),
+        tracks: [TimelineTrack(id: 'audio-1', name: 'Audio 1', type: TrackType.audio, clips: [occupied])],
+      ));
+      final controller = TimelineController(projectController: project);
+      controller.setPosition(const Duration(seconds: 5));
+
+      controller.addAudioClip(
+        trackId: 'audio-1', path: '/audio.wav', duration: const Duration(seconds: 120),
+      );
+
+      final added = project.tracks.expand((track) => track.clips).singleWhere((clip) => clip.id != 'occupied');
+      expect(added.start, const Duration(seconds: 5));
+      expect(added.duration, const Duration(seconds: 120));
+      expect(project.tracks.singleWhere((track) => track.clips.any((clip) => clip.id == added.id)).id, isNot('audio-1'));
+      expect(project.tracks.first.clips.single, same(occupied));
+      expect(project.project.duration, const Duration(seconds: 125));
+      controller.history.undo();
+      expect(project.tracks.expand((track) => track.clips), [occupied]);
+      controller.history.redo();
+      expect(project.tracks.expand((track) => track.clips).any((clip) => clip.id == added.id), isTrue);
+      controller.dispose();
+      project.dispose();
+    });
+  });
+
+  test('linking changes only the relationship and supports offsets', () {
+    final video = TimelineClip(id: 'video', type: ClipType.video, start: const Duration(seconds: 5), duration: const Duration(seconds: 15));
+    final audio = TimelineClip(id: 'audio', type: ClipType.audio, start: const Duration(seconds: 30), duration: const Duration(seconds: 10));
+    final project = ProjectController(project: EditorProject(duration: const Duration(seconds: 40), tracks: [
+      TimelineTrack(id: 'video-track', name: 'Video 1', type: TrackType.video, clips: [video]),
+      TimelineTrack(id: 'audio-track', name: 'Audio 1', type: TrackType.audio, clips: [audio]),
+    ]));
+    final controller = TimelineController(projectController: project);
+    controller.linkClips(firstClipId: 'video', secondClipId: 'audio');
+    final linked = project.getLinkedClips('video');
+    expect(linked.map((clip) => clip.start), containsAll([const Duration(seconds: 5), const Duration(seconds: 30)]));
+    expect(linked.map((clip) => clip.duration), containsAll([const Duration(seconds: 15), const Duration(seconds: 10)]));
+    controller.moveClip(clipId: 'video', fromTrackId: 'video-track', toTrackId: 'video-track', start: const Duration(seconds: 10));
+    expect(project.tracks[0].clips.single.start, const Duration(seconds: 10));
+    expect(project.tracks[1].clips.single.start, const Duration(seconds: 35));
+    controller.dispose();
+    project.dispose();
+  });
+
   group('TimelineController splitClip', () {
     test('returns safely when the track or clip is missing', () {
       final project = _projectWithClips([_clip('clip', Duration.zero)]);
