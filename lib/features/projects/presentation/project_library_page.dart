@@ -89,6 +89,76 @@ class _ProjectLibraryPageState extends State<ProjectLibraryPage> {
     setState(_reload);
   }
 
+  Future<void> _renameProject(SavedEditorProject project) async {
+    final controller = TextEditingController(text: project.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename project'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 60,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(
+            labelText: 'Project name',
+            hintText: 'Enter project name',
+          ),
+          onSubmitted: (value) {
+            final trimmed = value.trim();
+            if (trimmed.isNotEmpty) Navigator.pop(dialogContext, trimmed);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final trimmed = controller.text.trim();
+              if (trimmed.isNotEmpty) Navigator.pop(dialogContext, trimmed);
+            },
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newName == null || !mounted) return;
+    await _storage.renameProject(id: project.id, newName: newName);
+    if (!mounted) return;
+    setState(_reload);
+  }
+
+  Future<void> _deleteProject(SavedEditorProject project) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete project?'),
+        content: Text('“${project.name}” will be permanently deleted.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _storage.deleteProject(project.id);
+    if (!mounted) return;
+    setState(_reload);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Deleted ${project.name}')),
+    );
+  }
+
   static String _formattedDate(DateTime date) {
     String two(int value) => value.toString().padLeft(2, '0');
     return '${date.year}-${two(date.month)}-${two(date.day)} ${two(date.hour)}:${two(date.minute)}';
@@ -136,6 +206,8 @@ class _ProjectLibraryPageState extends State<ProjectLibraryPage> {
                           return _SavedProjectCard(
                             project: project,
                             onTap: () => _openSavedProject(project),
+                            onRename: () => _renameProject(project),
+                            onDelete: () => _deleteProject(project),
                           );
                         },
                         childCount: projects.length,
@@ -207,10 +279,17 @@ class _NewProjectCard extends StatelessWidget {
 }
 
 class _SavedProjectCard extends StatelessWidget {
-  const _SavedProjectCard({required this.project, required this.onTap});
+  const _SavedProjectCard({
+    required this.project,
+    required this.onTap,
+    required this.onRename,
+    required this.onDelete,
+  });
 
   final SavedEditorProject project;
   final VoidCallback onTap;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -235,20 +314,65 @@ class _SavedProjectCard extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+              child: Row(
                 children: [
-                  Text(
-                    project.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          project.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _duration(project.project.duration),
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.58),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _duration(project.project.duration),
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.58), fontSize: 12),
+                  PopupMenuButton<_ProjectCardAction>(
+                    tooltip: 'Project options',
+                    icon: const Icon(Icons.more_vert_rounded),
+                    onSelected: (action) {
+                      switch (action) {
+                        case _ProjectCardAction.rename:
+                          onRename();
+                          break;
+                        case _ProjectCardAction.delete:
+                          onDelete();
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: _ProjectCardAction.rename,
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined),
+                            SizedBox(width: 12),
+                            Text('Rename'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: _ProjectCardAction.delete,
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, color: Colors.redAccent),
+                            SizedBox(width: 12),
+                            Text('Delete'),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -265,6 +389,8 @@ class _SavedProjectCard extends StatelessWidget {
     return '$minutes:$seconds';
   }
 }
+
+enum _ProjectCardAction { rename, delete }
 
 class _EmptyProjectLibrary extends StatelessWidget {
   const _EmptyProjectLibrary();
