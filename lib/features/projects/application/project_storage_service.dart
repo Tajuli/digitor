@@ -52,6 +52,45 @@ class ProjectStorageService {
     }
   }
 
+  Future<SavedEditorProject?> renameProject({
+    required String id,
+    required String newName,
+  }) async {
+    final trimmedName = newName.trim();
+    if (trimmedName.isEmpty) return null;
+    final existing = await loadProject(id);
+    if (existing == null) return null;
+    final directory = await _projectsDirectory();
+    final renamed = SavedEditorProject(
+      id: existing.id,
+      name: trimmedName,
+      updatedAt: DateTime.now(),
+      thumbnailPath: existing.thumbnailPath,
+      project: existing.project,
+    );
+    final target = File('${directory.path}/$id.json');
+    final temporary = File('${target.path}.tmp');
+    await temporary.writeAsString(jsonEncode(_savedProjectToJson(renamed)));
+    if (await target.exists()) await target.delete();
+    await temporary.rename(target.path);
+    return renamed;
+  }
+
+  Future<bool> deleteProject(String id) async {
+    final directory = await _projectsDirectory();
+    final projectFile = File('${directory.path}/$id.json');
+    final thumbnailFile = File('${directory.path}/$id.jpg');
+    var deleted = false;
+    if (await projectFile.exists()) {
+      await projectFile.delete();
+      deleted = true;
+    }
+    if (await thumbnailFile.exists()) {
+      await thumbnailFile.delete();
+    }
+    return deleted;
+  }
+
   Future<SavedEditorProject> saveProject({
     required String id,
     required String name,
