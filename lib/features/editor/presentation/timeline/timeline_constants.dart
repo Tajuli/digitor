@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class TimelineConstants {
   static const double rulerHeight = 32;
 
-  static const double trackHeight = 72;
+  static const double trackHeight = 68;
 
   static const double headerWidth = 80;
 
@@ -11,7 +11,7 @@ class TimelineConstants {
 
   static const List<double> zoomLevels = [0.5, 1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 1920, 3840];
   static const double toolbarHeight = 40;
-  static const double clipHeight = 56;
+  static const double clipHeight = 52;
   static const double snapThresholdPixels = 10;
   static const double playheadSnapThresholdPixels = 12;
   static const double autoScrollEdge = 48;
@@ -25,6 +25,7 @@ class TimelineConstants {
   static const double playheadWidth = 2;
   static const double playheadLineWidth = 2;
   static const double playheadHandleSize = 12;
+  static const double playheadHeadHeight = 22;
   static const double playheadHitWidth = 36;
   static const double playheadLabelHeight = 20;
   static const double trimHandleWidth = 12;

@@ -9,9 +9,15 @@ class VideoPreview extends StatelessWidget {
   const VideoPreview({
     super.key,
     required this.playbackController,
+    this.mediaBuilder,
+    this.projectDuration,
+    this.timelinePosition,
   });
 
   final PlaybackController playbackController;
+  final Widget Function(Widget media)? mediaBuilder;
+  final Duration? projectDuration;
+  final Duration? timelinePosition;
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +72,7 @@ class VideoPreview extends StatelessWidget {
                   aspectRatio: controller.value.aspectRatio > 0
                       ? controller.value.aspectRatio
                       : 16 / 9,
-                  child: VideoPlayer(controller),
+                  child: mediaBuilder?.call(VideoPlayer(controller)) ?? VideoPlayer(controller),
                 ),
               ),
               if (!isPlaying)
@@ -144,8 +150,8 @@ class VideoPreview extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            '${_time(playbackController.position)} / '
-                            '${_time(playbackController.duration)}',
+                            '${_time(timelinePosition ?? playbackController.position)} / '
+                            '${_time(projectDuration ?? playbackController.duration)}',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 12,

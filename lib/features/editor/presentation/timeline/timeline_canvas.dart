@@ -11,6 +11,7 @@ import 'time_ruler.dart';
 import 'timeline_body.dart';
 import 'timeline_constants.dart';
 import 'timeline_scroll_controller.dart';
+import '../../domain/models/timeline_clip.dart';
 
 class TimelineCanvas extends StatefulWidget {
   const TimelineCanvas({super.key, required this.projectController, required this.timelineController, required this.scrollController, required this.playbackController});
@@ -22,6 +23,8 @@ class TimelineCanvas extends StatefulWidget {
 }
 
 class _TimelineCanvasState extends State<TimelineCanvas> {
+  TimelineClip? _clipboard;
+  _ClipboardAttribute? _clipboardAttribute;
   Timer? _autoScroll;
   bool _scrubbing = false;
   double _scrubX = 0;
@@ -51,7 +54,7 @@ class _TimelineCanvasState extends State<TimelineCanvas> {
                 Expanded(
                   child: SingleChildScrollView(
                     controller: widget.scrollController.vertical,
-                    child: TimelineBody(tracks: project.tracks, width: width, projectController: widget.projectController, timelineController: widget.timelineController, onMoveEnd: _moveEnd),
+                    child: TimelineBody(tracks: project.tracks, width: width, projectController: widget.projectController, timelineController: widget.timelineController, onMoveEnd: _moveEnd, onContextMenu: _showContextMenu),
                   ),
                 ),
               ]),
@@ -60,7 +63,6 @@ class _TimelineCanvasState extends State<TimelineCanvas> {
                 top: 0,
                 child: Playhead(
                   height: constraints.maxHeight,
-                  position: widget.timelineController.position,
                   onScrubStart: () {
                     _scrubbing = true;
                     _scrubX = playheadX;
@@ -116,4 +118,63 @@ class _TimelineCanvasState extends State<TimelineCanvas> {
     });
   }
   void _scrollBy(ScrollController controller, double amount) { if (controller.hasClients && amount != 0) controller.jumpTo((controller.offset + amount).clamp(0.0, controller.position.maxScrollExtent)); }
+  Future<void> _showContextMenu(TimelineClip clip, String trackId, Offset _) async {
+    widget.projectController.selectClip(trackId: trackId, clipId: clip.id);
+    final action = await showModalBottomSheet<_ClipMenuAction>(
+      context: context,
+      builder: (context) => SafeArea(child: ListView(shrinkWrap: true, children: [
+        for (final item in _ClipMenuAction.values.where((item) => item != _ClipMenuAction.paste || _clipboard != null))
+          ListTile(title: Text(item.label), onTap: () => Navigator.pop(context, item)),
+      ])),
+    );
+    if (action == null) return;
+    if (action.attribute != null) { _clipboard = clip; _clipboardAttribute = action.attribute; return; }
+    switch (action) {
+      case _ClipMenuAction.copy:
+        _clipboard = clip;
+        _clipboardAttribute = _ClipboardAttribute.all;
+        return;
+      case _ClipMenuAction.delete:
+        widget.timelineController.deleteSelectedClip();
+        return;
+      case _ClipMenuAction.split:
+        widget.timelineController.splitClip(trackId: trackId, clipId: clip.id, position: widget.timelineController.position);
+        return;
+      case _ClipMenuAction.duplicate:
+        widget.timelineController.addClipCopy(trackId: trackId, clip: clip);
+        return;
+      case _ClipMenuAction.paste:
+        _paste(clip);
+        return;
+      default:
+        return;
+    }
+  }
+  void _paste(TimelineClip target) {
+    final source = _clipboard; final attribute = _clipboardAttribute;
+    if (source == null || attribute == null) return;
+    final replacement = switch (attribute) {
+      _ClipboardAttribute.position => target.copyWith(position: source.position),
+      _ClipboardAttribute.scale => target.copyWith(scale: source.scale),
+      _ClipboardAttribute.rotation => target.copyWith(rotation: source.rotation),
+      _ClipboardAttribute.opacity => target.copyWith(opacity: source.opacity),
+      _ClipboardAttribute.effects => target.copyWith(effect: source.effect, filter: source.filter),
+      _ClipboardAttribute.color => target.copyWith(colorAdjustments: source.colorAdjustments),
+      _ClipboardAttribute.speed => target.copyWith(data: {...target.data, 'speed': source.data['speed']}),
+      _ClipboardAttribute.volume => target.copyWith(volume: source.volume, muted: source.muted),
+      _ClipboardAttribute.transform => target.copyWith(position: source.position, scale: source.scale, rotation: source.rotation, opacity: source.opacity),
+      _ClipboardAttribute.animation => target.copyWith(data: {...target.data, 'animation': source.data['animation']}),
+      _ClipboardAttribute.all => target.copyWith(position: source.position, scale: source.scale, rotation: source.rotation, opacity: source.opacity, colorAdjustments: source.colorAdjustments, filter: source.filter, effect: source.effect, volume: source.volume, muted: source.muted, data: {...target.data, ...source.data}),
+    };
+    widget.timelineController.updateClip(replacement);
+  }
+
+}
+
+
+enum _ClipboardAttribute { position, scale, rotation, opacity, effects, color, animation, speed, volume, transform, all }
+enum _ClipMenuAction {
+  copy, copyPosition, copyScale, copyRotation, copyOpacity, copyEffects, copyColor, copyAnimation, copySpeed, copyVolume, copyTransform, copyAll, duplicate, delete, split, paste;
+  _ClipboardAttribute? get attribute => switch (this) { copy => _ClipboardAttribute.all, copyPosition => _ClipboardAttribute.position, copyScale => _ClipboardAttribute.scale, copyRotation => _ClipboardAttribute.rotation, copyOpacity => _ClipboardAttribute.opacity, copyEffects => _ClipboardAttribute.effects, copyColor => _ClipboardAttribute.color, copyAnimation => _ClipboardAttribute.animation, copySpeed => _ClipboardAttribute.speed, copyVolume => _ClipboardAttribute.volume, copyTransform => _ClipboardAttribute.transform, copyAll => _ClipboardAttribute.all, _ => null };
+  String get label => switch (this) { copy => 'Copy', copyPosition => 'Copy Position', copyScale => 'Copy Scale', copyRotation => 'Copy Rotation', copyOpacity => 'Copy Opacity', copyEffects => 'Copy Effects', copyColor => 'Copy Color', copyAnimation => 'Copy Animation', copySpeed => 'Copy Speed', copyVolume => 'Copy Volume', copyTransform => 'Copy Transform', copyAll => 'Copy All Attributes', duplicate => 'Duplicate', delete => 'Delete', split => 'Split', paste => 'Paste' };
 }
