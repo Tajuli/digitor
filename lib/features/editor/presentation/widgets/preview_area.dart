@@ -13,12 +13,16 @@ class PreviewArea extends StatefulWidget {
     required this.playbackController,
     required this.previewProxyService,
     this.hasTimelineVideo = false,
+    required this.projectDuration,
+    required this.timelinePosition,
   });
 
   final EditorSession? session;
   final PlaybackController playbackController;
   final PreviewProxyService previewProxyService;
   final bool hasTimelineVideo;
+  final Duration projectDuration;
+  final Duration timelinePosition;
 
   @override
   State<PreviewArea> createState() => _PreviewAreaState();
@@ -43,45 +47,47 @@ class _PreviewAreaState extends State<PreviewArea> {
     setState(() => _scale = scale);
   }
 
+  Widget _interactiveMedia(Widget media) => ClipRect(
+        child: InteractiveViewer(
+          transformationController: _transformationController,
+          minScale: _minScale,
+          maxScale: _maxScale,
+          panEnabled: _scale > 1,
+          boundaryMargin: const EdgeInsets.all(240),
+          onInteractionUpdate: (_) {
+            final next = _transformationController.value.getMaxScaleOnAxis().clamp(_minScale, _maxScale).toDouble();
+            if ((next - _scale).abs() > .01) setState(() => _scale = next);
+          },
+          child: RepaintBoundary(child: media),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final media = widget.session?.media;
     final shouldShowVideo = widget.hasTimelineVideo || media?.isVideo == true;
     final content = shouldShowVideo
-        ? VideoPreview(playbackController: widget.playbackController)
+        ? VideoPreview(
+            playbackController: widget.playbackController,
+            projectDuration: widget.projectDuration,
+            timelinePosition: widget.timelinePosition,
+            mediaBuilder: _interactiveMedia,
+          )
         : media != null
-            ? Image.file(
+            ? _interactiveMedia(Image.file(
                 File(media.path),
                 fit: BoxFit.contain,
                 errorBuilder: (_, _, _) => const Center(
                   child: Icon(Icons.broken_image_rounded, size: 60),
                 ),
-              )
+              ))
             : const EmptyPreviewContent();
 
     return _PreviewFrame(
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ClipRect(
-            child: InteractiveViewer(
-              transformationController: _transformationController,
-              minScale: _minScale,
-              maxScale: _maxScale,
-              panEnabled: _scale > 1,
-              boundaryMargin: const EdgeInsets.all(240),
-              onInteractionUpdate: (_) {
-                final next = _transformationController.value
-                    .getMaxScaleOnAxis()
-                    .clamp(_minScale, _maxScale)
-                    .toDouble();
-                if ((next - _scale).abs() > 0.01) {
-                  setState(() => _scale = next);
-                }
-              },
-              child: RepaintBoundary(child: content),
-            ),
-          ),
+          content,
           Positioned(
             top: 8,
             right: 8,

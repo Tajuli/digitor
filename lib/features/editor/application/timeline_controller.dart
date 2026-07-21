@@ -156,6 +156,11 @@ class TimelineController extends ChangeNotifier {
         final track = _trackContaining(replacement.id);
         if (track != null) projectController.updateClip(trackId: track.id, clip: replacement);
       });
+  void addClipCopy({required String trackId, required TimelineClip clip}) => _recordProjectMutation(() {
+    final copy = clip.copyWith(id: projectController.newId(clip.type.name), start: snap(clip.start + clip.duration));
+    projectController.addClip(trackId: trackId, clip: copy);
+  });
+
   void deleteSelectedClip() {
     final clip = projectController.selectedClip;
     final track = clip == null ? null : _trackContaining(clip.id);
@@ -185,7 +190,20 @@ class TimelineController extends ChangeNotifier {
       if (linked.any((item) => item.id != clipId && track.clips.any((existing) => existing.id == item.id))) return track.copyWith(clips: track.clips.map((item) => linked.any((linkedClip) => linkedClip.id == item.id) ? item.copyWith(start: item.start + adjustedDelta) : item).toList());
       return track;
     }).toList();
-    _apply(projectController.project.copyWith(tracks: tracks), recordHistory ? MoveClipCommand(projectController, projectController.project, projectController.project.copyWith(tracks: tracks)) : null);
+    if (_hasOverlaps(tracks)) return;
+    final after = projectController.project.copyWith(tracks: tracks);
+    _apply(after, recordHistory ? MoveClipCommand(projectController, projectController.project, after) : null);
+  }
+
+
+  bool _hasOverlaps(List<TimelineTrack> tracks) {
+    for (final track in tracks) {
+      final clips = [...track.clips]..sort((a, b) => a.start.compareTo(b.start));
+      for (var index = 1; index < clips.length; index++) {
+        if (clips[index - 1].start + clips[index - 1].duration > clips[index].start) return true;
+      }
+    }
+    return false;
   }
 
   /// Splits a clip at [position], preserving the original clip's metadata.

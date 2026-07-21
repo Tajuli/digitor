@@ -339,7 +339,7 @@ class _EditorPageState extends State<EditorPage> {
                             Expanded(
                               flex: constraints.maxHeight < 560 ? 3 : 5,
                               child: ListenableBuilder(
-                                listenable: Listenable.merge([_controller, _projectController]),
+                                listenable: Listenable.merge([_controller, _projectController, _timelineController]),
                                 builder: (context, _) {
                                   final session = _controller.session;
                                   final hasTimelineVideo = _projectController.tracks
@@ -355,6 +355,8 @@ class _EditorPageState extends State<EditorPage> {
                                     session: session,
                                     playbackController: _playbackController,
                                     hasTimelineVideo: hasTimelineVideo,
+                                    projectDuration: _projectController.project.duration,
+                                    timelinePosition: _timelineController.position,
                                     previewProxyService: _previewProxyService,
                                   );
                                 },
@@ -362,7 +364,7 @@ class _EditorPageState extends State<EditorPage> {
                             ),
                             const SizedBox(height: 8),
                             Expanded(
-                              flex: constraints.maxHeight < 560 ? 3 : 2,
+                              flex: constraints.maxHeight < 560 ? 4 : 4,
                               child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController),
                             ),
                             const SizedBox(height: 8),
