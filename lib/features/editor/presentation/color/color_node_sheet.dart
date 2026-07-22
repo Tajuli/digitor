@@ -19,9 +19,16 @@ Future<ColorNodeGraph?> showColorNodeSheet(
 }
 
 class ColorNodeSheet extends StatefulWidget {
-  const ColorNodeSheet({super.key, required this.graph});
+  const ColorNodeSheet({
+    super.key,
+    required this.graph,
+    this.embedded = false,
+    this.onDone,
+  });
 
   final ColorNodeGraph graph;
+  final bool embedded;
+  final ValueChanged<ColorNodeGraph>? onDone;
 
   @override
   State<ColorNodeSheet> createState() => _ColorNodeSheetState();
@@ -88,9 +95,19 @@ class _ColorNodeSheetState extends State<ColorNodeSheet> {
                       disabledColor: Colors.white24,
                     ),
                     IconButton(
-                      tooltip: 'Done',
-                      onPressed: () => Navigator.pop(context, controller.graph),
-                      icon: const Icon(Icons.check, color: Colors.white),
+                      tooltip: 'Collapse Node Panel',
+                      onPressed: () {
+                        if (widget.onDone != null) {
+                          widget.onDone!(controller.graph);
+                        } else {
+                          Navigator.pop(context, controller.graph);
+                        }
+                      },
+                      icon: const Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: Colors.white,
+                        size: 30,
+                      ),
                     ),
                   ],
                 ),
