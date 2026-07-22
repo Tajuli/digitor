@@ -9,6 +9,7 @@ import android.os.Build
 import android.view.Display
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -285,7 +286,12 @@ class MainActivity : FlutterActivity() {
             .setDurationUs(durationMs * 1000)
             .setFrameRate(frameRate)
             .setRemoveAudio(removeAudio)
-            .setEffects(Effects(ImmutableList.of(), ImmutableList.of(presentation)))
+            .setEffects(
+                Effects(
+                    ImmutableList.of(),
+                    ImmutableList.of<Effect>(presentation),
+                ),
+            )
             .build()
     }
 
