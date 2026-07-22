@@ -320,7 +320,7 @@ class TimelineController extends ChangeNotifier {
   /// Returns a trimmed immutable clip, preserving the source offset for media.
   TimelineClip trimClip({required String trackId, required String clipId, required Duration start, required Duration end, bool recordHistory = true}) {
     final track = _track(trackId); final clip = track == null ? null : _clip(track, clipId);
-    if (track == null || clip == null || track.locked || clip.locked) return clip ?? const TimelineClip(id: '', type: ClipType.video, start: Duration.zero, duration: Duration.zero);
+    if (track == null || clip == null || track.locked || clip.locked) return clip ?? TimelineClip(id: '', type: ClipType.video, start: Duration.zero, duration: Duration.zero);
     final min = const Duration(milliseconds: 200);
     var newStart = snap(start, excludingClipId: clipId);
     var newEnd = snap(end, excludingClipId: clipId);
