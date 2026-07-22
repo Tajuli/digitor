@@ -178,6 +178,7 @@ class ColorNodeController extends ChangeNotifier {
 
   void deleteNode(String id) {
     if (!canDelete(id)) return;
+
     final node = _graph.nodeById(id)!;
     final incoming = _graph.connections
         .where((connection) => connection.to == id)
@@ -191,10 +192,8 @@ class ColorNodeController extends ChangeNotifier {
         .where((connection) => connection.from != id && connection.to != id)
         .toList();
 
-    // A serial node can sit between a single path, before a parallel split,
-    // or after a mixer. Rebuild every valid incoming -> outgoing path so
-    // deleting a middle node never leaves the graph disconnected.
     if (node.type == ColorNodeType.serial) {
+      // Rebuild every valid upstream -> downstream route.
       for (final input in incoming) {
         for (final output in outgoing) {
           if (input.from != output.to) {
@@ -204,34 +203,56 @@ class ColorNodeController extends ChangeNotifier {
       }
     }
 
-    if (node.type == ColorNodeType.parallel && outgoing.length == 1) {
-      final mixer = _graph.nodeById(outgoing.first.to);
-      if (mixer != null && mixer.type == ColorNodeType.parallelMixer) {
-        final mixerId = mixer.id;
-        final remainingInputs = connections
-            .where((connection) => connection.to == mixerId)
-            .toList();
-        final mixerOutputs = connections
-            .where((connection) => connection.from == mixerId)
-            .toList();
-        if (remainingInputs.length <= 1 && mixerOutputs.length == 1) {
-          final remaining = remainingInputs.firstOrNull;
-          connections = connections
-              .where(
-                (connection) =>
-                    connection.from != mixerId && connection.to != mixerId,
-              )
-              .toList();
-          nodes = nodes.where((item) => item.id != mixerId).toList();
-          if (remaining != null) {
-            connections.add(
-              NodeConnection(remaining.from, mixerOutputs.first.to),
-            );
-          } else if (incoming.length == 1) {
-            connections.add(
-              NodeConnection(incoming.first.from, mixerOutputs.first.to),
-            );
-          }
+    if (node.type == ColorNodeType.parallel) {
+      // Remember the source feeding the deleted branch. It is needed when
+      // this was the final input of a Parallel Mixer.
+      final deletedBranchSources = incoming.map((item) => item.from).toSet();
+
+      // A parallel node normally feeds one mixer, but process every outgoing
+      // mixer defensively so malformed/older saved graphs are repaired too.
+      final affectedMixerIds = outgoing
+          .map((item) => item.to)
+          .where((mixerId) {
+            final mixer = _graph.nodeById(mixerId);
+            return mixer?.type == ColorNodeType.parallelMixer;
+          })
+          .toSet();
+
+      for (final mixerId in affectedMixerIds) {
+        final result = _collapseMixerIfPossible(
+          mixerId: mixerId,
+          nodes: nodes,
+          connections: connections,
+          fallbackSources: deletedBranchSources,
+        );
+        nodes = result.nodes;
+        connections = result.connections;
+      }
+    }
+
+    // Normalize any orphan/single-input mixer left by old projects or by a
+    // chain of deletes. Repeat because collapsing one mixer can expose another.
+    var changed = true;
+    while (changed) {
+      changed = false;
+      final mixerIds = nodes
+          .where((item) => item.type == ColorNodeType.parallelMixer)
+          .map((item) => item.id)
+          .toList();
+
+      for (final mixerId in mixerIds) {
+        final beforeNodeCount = nodes.length;
+        final beforeConnectionCount = connections.length;
+        final result = _collapseMixerIfPossible(
+          mixerId: mixerId,
+          nodes: nodes,
+          connections: connections,
+        );
+        nodes = result.nodes;
+        connections = result.connections;
+        if (nodes.length != beforeNodeCount ||
+            connections.length != beforeConnectionCount) {
+          changed = true;
         }
       }
     }
@@ -249,6 +270,55 @@ class ColorNodeController extends ChangeNotifier {
       selectedNodeId: _graph.defaultNodeId,
     );
     notifyListeners();
+  }
+
+  _MixerCollapseResult _collapseMixerIfPossible({
+    required String mixerId,
+    required List<ColorNode> nodes,
+    required List<NodeConnection> connections,
+    Set<String> fallbackSources = const <String>{},
+  }) {
+    final mixer = nodes.where((item) => item.id == mixerId).firstOrNull;
+    if (mixer == null || mixer.type != ColorNodeType.parallelMixer) {
+      return _MixerCollapseResult(nodes, connections);
+    }
+
+    final inputs = connections
+        .where((connection) => connection.to == mixerId)
+        .toList();
+    final outputs = connections
+        .where((connection) => connection.from == mixerId)
+        .toList();
+
+    // Two or more active branches still need the mixer.
+    if (inputs.length >= 2) {
+      return _MixerCollapseResult(nodes, connections);
+    }
+
+    var nextNodes = nodes.where((item) => item.id != mixerId).toList();
+    var nextConnections = connections
+        .where(
+          (connection) =>
+              connection.from != mixerId && connection.to != mixerId,
+        )
+        .toList();
+
+    final sourceIds = inputs.isNotEmpty
+        ? inputs.map((item) => item.from).toSet()
+        : fallbackSources;
+
+    // One remaining branch: branch -> every former mixer downstream node.
+    // No remaining branch: deleted branch's upstream source bypasses mixer.
+    for (final sourceId in sourceIds) {
+      for (final output in outputs) {
+        if (sourceId != output.to) {
+          nextConnections.add(NodeConnection(sourceId, output.to));
+        }
+      }
+    }
+
+    nextConnections = _deduplicate(nextConnections);
+    return _MixerCollapseResult(nextNodes, nextConnections);
   }
 
   Set<String> _collectDownstreamIds(Iterable<String> startIds) {
@@ -299,4 +369,11 @@ class ColorNodeController extends ChangeNotifier {
 
   String _newId(String prefix) =>
       '$prefix-${DateTime.now().microsecondsSinceEpoch}';
+}
+
+class _MixerCollapseResult {
+  const _MixerCollapseResult(this.nodes, this.connections);
+
+  final List<ColorNode> nodes;
+  final List<NodeConnection> connections;
 }
