@@ -121,7 +121,7 @@ class _ColorNodeSheetState extends State<ColorNodeSheet> {
                     SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Drag nodes to arrange. Drag empty space to move around. Press and hold a node to add or delete.',
+                        'Press and hold, then drag to move a node. Release without moving to open Add/Delete options. Drag empty space to move around.',
                         style: TextStyle(color: Colors.white54, fontSize: 11),
                       ),
                     ),
@@ -196,6 +196,7 @@ class _GraphCanvasState extends State<_GraphCanvas> {
                   left: node.position.dx,
                   top: node.position.dy,
                   child: _NodeCard(
+                    key: ValueKey(node.id),
                     node: node,
                     controller: widget.controller,
                   ),
@@ -209,65 +210,42 @@ class _GraphCanvasState extends State<_GraphCanvas> {
   }
 }
 
-class _NodeCard extends StatelessWidget {
-  const _NodeCard({required this.node, required this.controller});
+class _NodeCard extends StatefulWidget {
+  const _NodeCard({
+    super.key,
+    required this.node,
+    required this.controller,
+  });
 
   final ColorNode node;
   final ColorNodeController controller;
 
   @override
+  State<_NodeCard> createState() => _NodeCardState();
+}
+
+class _NodeCardState extends State<_NodeCard> {
+  static const double _moveThreshold = 8;
+
+  Offset? _longPressStartNodePosition;
+  Offset? _longPressStartGlobalPosition;
+  Offset? _lastGlobalPosition;
+  bool _movedDuringLongPress = false;
+
+  ColorNode get node => widget.node;
+  ColorNodeController get controller => widget.controller;
+
+  @override
   Widget build(BuildContext context) {
-    final selected = controller.graph.selectedNodeId == node.id;
+    final selected =
+        node.supportsProcessing && controller.graph.selectedNodeId == node.id;
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => controller.select(node.id),
-      onPanStart: (_) => controller.select(node.id),
-      onPanUpdate: (details) {
-        controller.move(node.id, node.position + details.delta);
-      },
-      onLongPressStart: (details) async {
-        HapticFeedback.mediumImpact();
-        controller.select(node.id);
-        final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-        final action = await showMenu<String>(
-          context: context,
-          position: RelativeRect.fromRect(
-            Rect.fromPoints(
-              details.globalPosition,
-              details.globalPosition,
-            ),
-            Offset.zero & overlay.size,
-          ),
-          items: [
-            if (node.type != ColorNodeType.output)
-              const PopupMenuItem(
-                value: 'serial',
-                child: Text('Add Serial Node'),
-              ),
-            if (node.supportsProcessing)
-              const PopupMenuItem(
-                value: 'parallel',
-                child: Text('Add Parallel Node'),
-              ),
-            if (controller.canDelete(node.id))
-              const PopupMenuDivider(),
-            if (controller.canDelete(node.id))
-              const PopupMenuItem(
-                value: 'delete',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_outline, color: Colors.redAccent),
-                    SizedBox(width: 10),
-                    Text('Delete Node'),
-                  ],
-                ),
-              ),
-          ],
-        );
-        if (action == 'serial') controller.addSerialAfter(node.id);
-        if (action == 'parallel') controller.addParallelFrom(node.id);
-        if (action == 'delete') controller.deleteNode(node.id);
-      },
+      onTap: node.supportsProcessing ? () => controller.select(node.id) : null,
+      onLongPressStart: _handleLongPressStart,
+      onLongPressMoveUpdate: _handleLongPressMove,
+      onLongPressEnd: _handleLongPressEnd,
       child: Container(
         width: 124,
         height: 76,
@@ -328,6 +306,85 @@ class _NodeCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  void _handleLongPressStart(LongPressStartDetails details) {
+    HapticFeedback.mediumImpact();
+    _longPressStartNodePosition = node.position;
+    _longPressStartGlobalPosition = details.globalPosition;
+    _lastGlobalPosition = details.globalPosition;
+    _movedDuringLongPress = false;
+  }
+
+  void _handleLongPressMove(LongPressMoveUpdateDetails details) {
+    final startNodePosition = _longPressStartNodePosition;
+    final startGlobalPosition = _longPressStartGlobalPosition;
+    if (startNodePosition == null || startGlobalPosition == null) return;
+
+    final delta = details.globalPosition - startGlobalPosition;
+    if (delta.distance >= _moveThreshold) {
+      _movedDuringLongPress = true;
+    }
+    _lastGlobalPosition = details.globalPosition;
+    controller.move(node.id, startNodePosition + delta);
+  }
+
+  Future<void> _handleLongPressEnd(LongPressEndDetails details) async {
+    final menuPosition = _lastGlobalPosition ?? details.globalPosition;
+    final shouldShowMenu = !_movedDuringLongPress;
+
+    _longPressStartNodePosition = null;
+    _longPressStartGlobalPosition = null;
+    _lastGlobalPosition = null;
+    _movedDuringLongPress = false;
+
+    if (!shouldShowMenu) return;
+    await _showNodeMenu(menuPosition);
+  }
+
+  Future<void> _showNodeMenu(Offset globalPosition) async {
+    final canAddSerial = node.type != ColorNodeType.output;
+    final canAddParallel = node.supportsProcessing;
+    final canDelete = controller.canDelete(node.id);
+    if (!canAddSerial && !canAddParallel && !canDelete) return;
+
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(globalPosition, globalPosition),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        if (canAddSerial)
+          const PopupMenuItem(
+            value: 'serial',
+            child: Text('Add Serial Node'),
+          ),
+        if (canAddParallel)
+          const PopupMenuItem(
+            value: 'parallel',
+            child: Text('Add Parallel Node'),
+          ),
+        if (canDelete) const PopupMenuDivider(),
+        if (canDelete)
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, color: Colors.redAccent),
+                SizedBox(width: 10),
+                Text('Delete Node'),
+              ],
+            ),
+          ),
+      ],
+    );
+
+    if (!mounted) return;
+    if (action == 'serial') controller.addSerialAfter(node.id);
+    if (action == 'parallel') controller.addParallelFrom(node.id);
+    if (action == 'delete') controller.deleteNode(node.id);
   }
 
   String _nodeTypeLabel(ColorNodeType type) => switch (type) {
