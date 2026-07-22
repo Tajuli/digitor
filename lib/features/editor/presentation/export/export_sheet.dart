@@ -337,7 +337,7 @@ class _ExportSheetState extends State<_ExportSheet> {
 
   Widget _dropdown<T>({required String label, required IconData icon, required T value, required Map<T, String> items, required ValueChanged<T> onChanged}) {
     return DropdownButtonFormField<T>(
-      initialValue: value,
+      value: value,
       isExpanded: true,
       decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
       items: items.entries.map((entry) => DropdownMenuItem(value: entry.key, child: Text(entry.value))).toList(),
