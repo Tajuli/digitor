@@ -307,8 +307,25 @@ class ColorNodeController extends ChangeNotifier {
         ? inputs.map((item) => item.from).toSet()
         : fallbackSources;
 
-    // One remaining branch: branch -> every former mixer downstream node.
-    // No remaining branch: deleted branch's upstream source bypasses mixer.
+    // When only one parallel branch remains, the parallel group no longer
+    // exists. Promote that remaining processing node to a true serial node so
+    // all later add/delete/select and grading behavior matches a serial node.
+    if (inputs.length == 1) {
+      final remainingId = inputs.single.from;
+      nextNodes = nextNodes.map((item) {
+        if (item.id != remainingId || item.type != ColorNodeType.parallel) {
+          return item;
+        }
+        return item.copyWith(
+          type: ColorNodeType.serial,
+          name: _serialNameFromParallel(item.name),
+        );
+      }).toList();
+    }
+
+    // One remaining branch: promoted serial node -> every former mixer
+    // downstream node. No remaining branch: the deleted branch's upstream
+    // source bypasses the mixer.
     for (final sourceId in sourceIds) {
       for (final output in outputs) {
         if (sourceId != output.to) {
@@ -319,6 +336,13 @@ class ColorNodeController extends ChangeNotifier {
 
     nextConnections = _deduplicate(nextConnections);
     return _MixerCollapseResult(nextNodes, nextConnections);
+  }
+
+
+  String _serialNameFromParallel(String currentName) {
+    final match = RegExp(r'(\d+)$').firstMatch(currentName.trim());
+    if (match != null) return 'Node ${match.group(1)}';
+    return 'Node ${(_processingCount()).toString().padLeft(2, '0')}';
   }
 
   Set<String> _collectDownstreamIds(Iterable<String> startIds) {
