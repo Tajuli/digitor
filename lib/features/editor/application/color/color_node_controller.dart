@@ -18,10 +18,9 @@ class ColorNodeController extends ChangeNotifier {
   }
 
   void select(String? id) {
-    _graph = _graph.copyWith(
-      selectedNodeId: id,
-      clearSelection: id == null,
-    );
+    final node = _graph.nodeById(id);
+    if (node == null || !node.supportsProcessing) return;
+    _graph = _graph.copyWith(selectedNodeId: id);
     notifyListeners();
   }
 
@@ -56,15 +55,24 @@ class ColorNodeController extends ChangeNotifier {
   void addSerialAfter(String anchorId) {
     final anchor = _graph.nodeById(anchorId);
     if (anchor == null || anchor.type == ColorNodeType.output) return;
+
     final outgoing = _graph.connections
         .where((connection) => connection.from == anchorId)
         .toList();
+    if (outgoing.isEmpty) return;
+
+    const spacing = 175.0;
+    final downstreamIds = _collectDownstreamIds(
+      outgoing.map((connection) => connection.to),
+    );
+    final shiftedNodes = _shiftNodes(_graph.nodes, downstreamIds, spacing);
+
     final id = _newId('node');
     final node = ColorNode(
       id: id,
       type: ColorNodeType.serial,
       name: 'Node ${(_processingCount() + 1).toString().padLeft(2, '0')}',
-      position: anchor.position + const Offset(175, 0),
+      position: anchor.position + const Offset(spacing, 0),
     );
     final links = [
       ..._graph.connections.where((connection) => connection.from != anchorId),
@@ -72,7 +80,7 @@ class ColorNodeController extends ChangeNotifier {
       ...outgoing.map((connection) => NodeConnection(id, connection.to)),
     ];
     _graph = _graph.copyWith(
-      nodes: [..._graph.nodes, node],
+      nodes: [...shiftedNodes, node],
       connections: links,
       selectedNodeId: id,
     );
@@ -102,8 +110,18 @@ class ColorNodeController extends ChangeNotifier {
     );
 
     if (existingMixer != null) {
+      var nodes = _graph.nodes;
+      final minimumMixerX = anchor.position.dx + 370;
+      if (existingMixer.position.dx < minimumMixerX) {
+        final downstreamIds = _collectDownstreamIds([existingMixer.id]);
+        nodes = _shiftNodes(
+          nodes,
+          downstreamIds,
+          minimumMixerX - existingMixer.position.dx,
+        );
+      }
       _graph = _graph.copyWith(
-        nodes: [..._graph.nodes, branch],
+        nodes: [...nodes, branch],
         connections: [
           ..._graph.connections,
           NodeConnection(anchorId, branchId),
@@ -116,6 +134,8 @@ class ColorNodeController extends ChangeNotifier {
     }
 
     final oldNext = outgoing.first.to;
+    final downstreamIds = _collectDownstreamIds([oldNext]);
+    final shiftedNodes = _shiftNodes(_graph.nodes, downstreamIds, 370);
     final mixerId = _newId('mixer');
     final mixer = ColorNode(
       id: mixerId,
@@ -137,7 +157,7 @@ class ColorNodeController extends ChangeNotifier {
         )
         .toList();
     _graph = _graph.copyWith(
-      nodes: [..._graph.nodes, oldBranch, branch, mixer],
+      nodes: [...shiftedNodes, oldBranch, branch, mixer],
       connections: [
         ...cleaned,
         NodeConnection(anchorId, oldBranchId),
@@ -229,6 +249,33 @@ class ColorNodeController extends ChangeNotifier {
       selectedNodeId: _graph.defaultNodeId,
     );
     notifyListeners();
+  }
+
+  Set<String> _collectDownstreamIds(Iterable<String> startIds) {
+    final result = <String>{};
+    final queue = <String>[...startIds];
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      if (!result.add(current)) continue;
+      queue.addAll(
+        _graph.connections
+            .where((connection) => connection.from == current)
+            .map((connection) => connection.to),
+      );
+    }
+    return result;
+  }
+
+  List<ColorNode> _shiftNodes(
+    List<ColorNode> nodes,
+    Set<String> ids,
+    double dx,
+  ) {
+    if (dx <= 0 || ids.isEmpty) return nodes;
+    return nodes.map((node) {
+      if (!ids.contains(node.id)) return node;
+      return node.copyWith(position: node.position + Offset(dx, 0));
+    }).toList();
   }
 
   List<NodeConnection> _deduplicate(List<NodeConnection> values) {
