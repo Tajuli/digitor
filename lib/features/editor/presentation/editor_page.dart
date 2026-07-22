@@ -18,6 +18,7 @@ import 'package:digitor/features/editor/domain/models/media_item.dart';
 import 'package:digitor/features/editor/domain/models/timeline_track.dart';
 import 'package:digitor/features/editor/domain/models/timeline_clip.dart';
 import 'package:digitor/features/editor/domain/models/clip_type.dart';
+import 'package:digitor/features/editor/domain/models/color/color_node_graph.dart';
 import 'package:digitor/features/editor/domain/models/track_type.dart';
 import 'package:digitor/features/editor/presentation/widgets/editor_toolbar.dart';
 import 'package:digitor/features/editor/presentation/color/color_node_sheet.dart';
@@ -68,6 +69,7 @@ class _EditorPageState extends State<EditorPage> {
   Duration _activeSourceStart = Duration.zero;
   bool _isSaving = false;
   bool _allowPop = false;
+  bool _showColorNodes = false;
 
   @override
   void initState() {
@@ -358,12 +360,19 @@ class _EditorPageState extends State<EditorPage> {
       );
       return;
     }
-    final graph = await showColorNodeSheet(context, clip.colorNodeGraph);
-    if (!mounted || graph == null) return;
-    _timelineController.updateClip(clip.copyWith(
-      colorNodeGraph: graph,
-      colorAdjustments: graph.combinedGrade,
-    ));
+    _playbackController.pause();
+    setState(() => _showColorNodes = true);
+  }
+
+  void _closeColorNodes(ColorNodeGraph graph) {
+    final clip = _projectController.selectedClip;
+    if (clip != null && clip.type == ClipType.video) {
+      _timelineController.updateClip(clip.copyWith(
+        colorNodeGraph: graph,
+        colorAdjustments: graph.combinedGrade,
+      ));
+    }
+    if (mounted) setState(() => _showColorNodes = false);
   }
 
   Future<void> _openExportSheet() async {
@@ -553,21 +562,40 @@ class _EditorPageState extends State<EditorPage> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            Expanded(
-                              flex: constraints.maxHeight < 560 ? 4 : 4,
-                              child: TimelineView(controller: _projectController, timelineController: _timelineController, playbackController: _playbackController),
-                            ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              height: 128,
-                              child: EditorToolbar(
-                                tools: _toolController,
-                                project: _projectController,
-                                timeline: _timelineController,
-                                onExport: _openExportSheet,
-                                onOpenNodes: _openColorNodes,
+                            if (_showColorNodes)
+                              Expanded(
+                                flex: constraints.maxHeight < 560 ? 4 : 4,
+                                child: ColorNodeSheet(
+                                  key: ValueKey(
+                                    _projectController.selectedClip?.id,
+                                  ),
+                                  graph: _projectController
+                                      .selectedClip!.colorNodeGraph,
+                                  embedded: true,
+                                  onDone: _closeColorNodes,
+                                ),
+                              )
+                            else ...[
+                              Expanded(
+                                flex: constraints.maxHeight < 560 ? 4 : 4,
+                                child: TimelineView(
+                                  controller: _projectController,
+                                  timelineController: _timelineController,
+                                  playbackController: _playbackController,
+                                ),
                               ),
-                            ),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: 128,
+                                child: EditorToolbar(
+                                  tools: _toolController,
+                                  project: _projectController,
+                                  timeline: _timelineController,
+                                  onExport: _openExportSheet,
+                                  onOpenNodes: _openColorNodes,
+                                ),
+                              ),
+                            ],
                           ],
                         
                     ),
