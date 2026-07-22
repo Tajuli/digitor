@@ -171,10 +171,17 @@ class ColorNodeController extends ChangeNotifier {
         .where((connection) => connection.from != id && connection.to != id)
         .toList();
 
-    if (node.type == ColorNodeType.serial &&
-        incoming.length == 1 &&
-        outgoing.length == 1) {
-      connections.add(NodeConnection(incoming.first.from, outgoing.first.to));
+    // A serial node can sit between a single path, before a parallel split,
+    // or after a mixer. Rebuild every valid incoming -> outgoing path so
+    // deleting a middle node never leaves the graph disconnected.
+    if (node.type == ColorNodeType.serial) {
+      for (final input in incoming) {
+        for (final output in outgoing) {
+          if (input.from != output.to) {
+            connections.add(NodeConnection(input.from, output.to));
+          }
+        }
+      }
     }
 
     if (node.type == ColorNodeType.parallel && outgoing.length == 1) {
@@ -209,9 +216,16 @@ class ColorNodeController extends ChangeNotifier {
       }
     }
 
+    final existingNodeIds = nodes.map((item) => item.id).toSet();
+    final rebuiltConnections = _deduplicate(connections).where((connection) {
+      return connection.from != connection.to &&
+          existingNodeIds.contains(connection.from) &&
+          existingNodeIds.contains(connection.to);
+    }).toList();
+
     _graph = _graph.copyWith(
       nodes: nodes,
-      connections: _deduplicate(connections),
+      connections: rebuiltConnections,
       selectedNodeId: _graph.defaultNodeId,
     );
     notifyListeners();
