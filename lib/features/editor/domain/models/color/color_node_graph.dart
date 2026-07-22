@@ -1,0 +1,184 @@
+import 'package:digitor/features/editor/domain/models/clip_adjustments.dart';
+import 'package:flutter/material.dart';
+
+enum ColorNodeType { input, serial, parallel, parallelMixer, output }
+
+class HslQualifierSettings {
+  const HslQualifierSettings({
+    this.enabled = false,
+    this.hueCenter = 0.5,
+    this.hueWidth = 1,
+    this.saturationLow = 0,
+    this.saturationHigh = 1,
+    this.luminanceLow = 0,
+    this.luminanceHigh = 1,
+    this.softness = 0.1,
+    this.denoise = 0,
+    this.blur = 0,
+    this.inverted = false,
+  });
+
+  final bool enabled;
+  final double hueCenter;
+  final double hueWidth;
+  final double saturationLow;
+  final double saturationHigh;
+  final double luminanceLow;
+  final double luminanceHigh;
+  final double softness;
+  final double denoise;
+  final double blur;
+  final bool inverted;
+
+  HslQualifierSettings copyWith({
+    bool? enabled,
+    double? hueCenter,
+    double? hueWidth,
+    double? saturationLow,
+    double? saturationHigh,
+    double? luminanceLow,
+    double? luminanceHigh,
+    double? softness,
+    double? denoise,
+    double? blur,
+    bool? inverted,
+  }) => HslQualifierSettings(
+    enabled: enabled ?? this.enabled,
+    hueCenter: hueCenter ?? this.hueCenter,
+    hueWidth: hueWidth ?? this.hueWidth,
+    saturationLow: saturationLow ?? this.saturationLow,
+    saturationHigh: saturationHigh ?? this.saturationHigh,
+    luminanceLow: luminanceLow ?? this.luminanceLow,
+    luminanceHigh: luminanceHigh ?? this.luminanceHigh,
+    softness: softness ?? this.softness,
+    denoise: denoise ?? this.denoise,
+    blur: blur ?? this.blur,
+    inverted: inverted ?? this.inverted,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled, 'hueCenter': hueCenter, 'hueWidth': hueWidth,
+    'saturationLow': saturationLow, 'saturationHigh': saturationHigh,
+    'luminanceLow': luminanceLow, 'luminanceHigh': luminanceHigh,
+    'softness': softness, 'denoise': denoise, 'blur': blur, 'inverted': inverted,
+  };
+
+  factory HslQualifierSettings.fromJson(Map<String, dynamic> json) => HslQualifierSettings(
+    enabled: json['enabled'] as bool? ?? false,
+    hueCenter: (json['hueCenter'] as num?)?.toDouble() ?? .5,
+    hueWidth: (json['hueWidth'] as num?)?.toDouble() ?? 1,
+    saturationLow: (json['saturationLow'] as num?)?.toDouble() ?? 0,
+    saturationHigh: (json['saturationHigh'] as num?)?.toDouble() ?? 1,
+    luminanceLow: (json['luminanceLow'] as num?)?.toDouble() ?? 0,
+    luminanceHigh: (json['luminanceHigh'] as num?)?.toDouble() ?? 1,
+    softness: (json['softness'] as num?)?.toDouble() ?? .1,
+    denoise: (json['denoise'] as num?)?.toDouble() ?? 0,
+    blur: (json['blur'] as num?)?.toDouble() ?? 0,
+    inverted: json['inverted'] as bool? ?? false,
+  );
+}
+
+class ColorNode {
+  const ColorNode({
+    required this.id,
+    required this.type,
+    required this.name,
+    required this.position,
+    this.enabled = true,
+    this.grade = const ClipColorAdjustments(),
+    this.qualifier = const HslQualifierSettings(),
+  });
+
+  final String id;
+  final ColorNodeType type;
+  final String name;
+  final Offset position;
+  final bool enabled;
+  final ClipColorAdjustments grade;
+  final HslQualifierSettings qualifier;
+
+  bool get supportsProcessing => type == ColorNodeType.serial || type == ColorNodeType.parallel;
+
+  ColorNode copyWith({String? name, Offset? position, bool? enabled, ClipColorAdjustments? grade, HslQualifierSettings? qualifier}) => ColorNode(
+    id: id, type: type, name: name ?? this.name, position: position ?? this.position,
+    enabled: enabled ?? this.enabled, grade: grade ?? this.grade, qualifier: qualifier ?? this.qualifier,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'type': type.name, 'name': name, 'x': position.dx, 'y': position.dy,
+    'enabled': enabled,
+    'grade': {
+      'exposure': grade.exposure, 'contrast': grade.contrast, 'saturation': grade.saturation,
+      'temperature': grade.temperature, 'tint': grade.tint, 'highlights': grade.highlights, 'shadows': grade.shadows,
+    },
+    'qualifier': qualifier.toJson(),
+  };
+
+  factory ColorNode.fromJson(Map<String, dynamic> json) {
+    final grade = Map<String, dynamic>.from((json['grade'] as Map?) ?? const {});
+    return ColorNode(
+      id: json['id'] as String,
+      type: ColorNodeType.values.byName(json['type'] as String),
+      name: json['name'] as String? ?? 'Node',
+      position: Offset((json['x'] as num?)?.toDouble() ?? 0, (json['y'] as num?)?.toDouble() ?? 0),
+      enabled: json['enabled'] as bool? ?? true,
+      grade: ClipColorAdjustments(
+        exposure: (grade['exposure'] as num?)?.toDouble() ?? 0,
+        contrast: (grade['contrast'] as num?)?.toDouble() ?? 0,
+        saturation: (grade['saturation'] as num?)?.toDouble() ?? 0,
+        temperature: (grade['temperature'] as num?)?.toDouble() ?? 0,
+        tint: (grade['tint'] as num?)?.toDouble() ?? 0,
+        highlights: (grade['highlights'] as num?)?.toDouble() ?? 0,
+        shadows: (grade['shadows'] as num?)?.toDouble() ?? 0,
+      ),
+      qualifier: HslQualifierSettings.fromJson(Map<String, dynamic>.from((json['qualifier'] as Map?) ?? const {})),
+    );
+  }
+}
+
+class NodeConnection {
+  const NodeConnection(this.from, this.to);
+  final String from;
+  final String to;
+  Map<String, dynamic> toJson() => {'from': from, 'to': to};
+  factory NodeConnection.fromJson(Map<String, dynamic> json) => NodeConnection(json['from'] as String, json['to'] as String);
+}
+
+class ColorNodeGraph {
+  const ColorNodeGraph({required this.nodes, required this.connections, this.selectedNodeId, required this.defaultNodeId});
+  final List<ColorNode> nodes;
+  final List<NodeConnection> connections;
+  final String? selectedNodeId;
+  final String defaultNodeId;
+
+  factory ColorNodeGraph.defaultGraph({ClipColorAdjustments initialGrade = const ClipColorAdjustments()}) => ColorNodeGraph(
+    defaultNodeId: 'node-1', selectedNodeId: 'node-1',
+    nodes: [
+      const ColorNode(id: 'input', type: ColorNodeType.input, name: 'Input', position: Offset(20, 90)),
+      ColorNode(id: 'node-1', type: ColorNodeType.serial, name: 'Node 01', position: const Offset(170, 90), grade: initialGrade),
+      const ColorNode(id: 'output', type: ColorNodeType.output, name: 'Output', position: Offset(340, 90)),
+    ],
+    connections: const [NodeConnection('input', 'node-1'), NodeConnection('node-1', 'output')],
+  );
+
+  ColorNode? nodeById(String? id) => id == null ? null : nodes.where((n) => n.id == id).firstOrNull;
+  ColorNode get defaultNode => nodeById(defaultNodeId)!;
+  ColorNode get qualifierTarget {
+    final selected = nodeById(selectedNodeId);
+    return selected != null && selected.supportsProcessing ? selected : defaultNode;
+  }
+
+  ColorNodeGraph copyWith({List<ColorNode>? nodes, List<NodeConnection>? connections, String? selectedNodeId, bool clearSelection = false}) => ColorNodeGraph(
+    nodes: nodes ?? this.nodes, connections: connections ?? this.connections,
+    selectedNodeId: clearSelection ? null : selectedNodeId ?? this.selectedNodeId,
+    defaultNodeId: defaultNodeId,
+  );
+
+  Map<String, dynamic> toJson() => {'nodes': nodes.map((n) => n.toJson()).toList(), 'connections': connections.map((c) => c.toJson()).toList(), 'selectedNodeId': selectedNodeId, 'defaultNodeId': defaultNodeId};
+  factory ColorNodeGraph.fromJson(Map<String, dynamic> json) => ColorNodeGraph(
+    nodes: ((json['nodes'] as List?) ?? const []).whereType<Map>().map((e) => ColorNode.fromJson(Map<String, dynamic>.from(e))).toList(),
+    connections: ((json['connections'] as List?) ?? const []).whereType<Map>().map((e) => NodeConnection.fromJson(Map<String, dynamic>.from(e))).toList(),
+    selectedNodeId: json['selectedNodeId'] as String?,
+    defaultNodeId: json['defaultNodeId'] as String? ?? 'node-1',
+  );
+}
