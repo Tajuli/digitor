@@ -99,9 +99,21 @@ class ColorNode {
 
   bool get supportsProcessing => type == ColorNodeType.serial || type == ColorNodeType.parallel;
 
-  ColorNode copyWith({String? name, Offset? position, bool? enabled, ClipColorAdjustments? grade, HslQualifierSettings? qualifier}) => ColorNode(
-    id: id, type: type, name: name ?? this.name, position: position ?? this.position,
-    enabled: enabled ?? this.enabled, grade: grade ?? this.grade, qualifier: qualifier ?? this.qualifier,
+  ColorNode copyWith({
+    ColorNodeType? type,
+    String? name,
+    Offset? position,
+    bool? enabled,
+    ClipColorAdjustments? grade,
+    HslQualifierSettings? qualifier,
+  }) => ColorNode(
+    id: id,
+    type: type ?? this.type,
+    name: name ?? this.name,
+    position: position ?? this.position,
+    enabled: enabled ?? this.enabled,
+    grade: grade ?? this.grade,
+    qualifier: qualifier ?? this.qualifier,
   );
 
   Map<String, dynamic> toJson() => {
