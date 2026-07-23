@@ -57,6 +57,7 @@ class DigLogCaptureActivity : Activity() {
     private var session: CameraCaptureSession? = null
     private var recorder: MediaRecorder? = null
     private var digLog10: DigLog10Engine? = null
+    private var digLog8Gpu: DigLog8GpuEngine? = null
     private var usingTenBit = false
     private var backgroundThread: HandlerThread? = null
     private var background: Handler? = null
@@ -303,27 +304,43 @@ class DigLogCaptureActivity : Activity() {
         try {
             closeSession()
             outputFile = createOutputFile()
-            recorder = createRecorder(outputFile!!)
-            val texture = preview.surfaceTexture ?: return
+            usingTenBit = false
+            record.isEnabled = false
+            status.text = "DigLog GPU preparing"
+
+            val texture = preview.surfaceTexture ?: throw IllegalStateException("Preview surface unavailable")
             texture.setDefaultBufferSize(previewSize.width, previewSize.height)
             val previewSurface = Surface(texture)
-            val recorderSurface = recorder!!.surface
-            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(previewSurface)
-                addTarget(recorderSurface)
-                applyDigLogControls(this)
-            }
-            device.createCaptureSession(listOf(previewSurface, recorderSurface), object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(s: CameraCaptureSession) {
-                    session = s
-                    s.setRepeatingRequest(builder.build(), null, background)
-                    recorder!!.start()
+            val engine = DigLog8GpuEngine(
+                camera = device,
+                size = videoSize,
+                fps = 30,
+                bitrate = if (videoSize.width >= 1920) 20_000_000 else 10_000_000,
+                output = outputFile!!,
+                previewSurface = previewSurface,
+                background = background ?: throw IllegalStateException("Camera thread unavailable"),
+                configureRequest = { builder -> applyDigLogControls(builder, applyToneCurve = false) },
+                onReady = { codec ->
+                    activeCodec = codec
+                    activeAudio = false
+                    activeBitrate = if (videoSize.width >= 1920) 20_000_000 else 10_000_000
                     recording = true
-                    runOnUiThread { record.isEnabled = true; record.text = "STOP"; status.text = "DigLog • REC" }
-                }
-                override fun onConfigureFailed(s: CameraCaptureSession) { finishCanceled("Recording configuration failed") }
-            }, background)
-        } catch (e: Exception) { finishCanceled(e.message ?: "Recording could not start") }
+                    runOnUiThread {
+                        record.isEnabled = true
+                        record.text = "STOP"
+                        status.text = "DigLog GPU • REC"
+                    }
+                },
+                onError = { message ->
+                    outputFile?.delete()
+                    runOnUiThread { finishCanceled(message) }
+                },
+            )
+            digLog8Gpu = engine
+            engine.start()
+        } catch (e: Exception) {
+            finishCanceled(e.message ?: "Recording could not start")
+        }
     }
 
     private fun stopRecording() {
@@ -334,9 +351,8 @@ class DigLogCaptureActivity : Activity() {
             digLog10 = null
             ok
         } else {
-            runCatching { session?.stopRepeating() }
-            val ok = runCatching { recorder?.stop(); true }.getOrElse { false }
-            recorder?.reset(); recorder?.release(); recorder = null
+            val ok = digLog8Gpu?.stop() == true
+            digLog8Gpu = null
             ok
         }
         val file = outputFile
@@ -353,7 +369,7 @@ class DigLogCaptureActivity : Activity() {
         finish()
     }
 
-    private fun applyDigLogControls(builder: CaptureRequest.Builder) {
+    private fun applyDigLogControls(builder: CaptureRequest.Builder, applyToneCurve: Boolean = true) {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         val characteristics = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
         val requestKeys = characteristics?.availableCaptureRequestKeys?.toSet().orEmpty()
@@ -398,7 +414,7 @@ class DigLogCaptureActivity : Activity() {
         }
 
         val toneModes = characteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
-        if (toneModes.contains(CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE) &&
+        if (applyToneCurve && toneModes.contains(CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE) &&
             requestKeys.contains(CaptureRequest.TONEMAP_CURVE)) {
             setIfSupported(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
             setIfSupported(CaptureRequest.TONEMAP_CURVE, buildDigLogCurve())
@@ -536,8 +552,8 @@ class DigLogCaptureActivity : Activity() {
         val json = JSONObject().apply {
             put("profile", "DigLog")
             put("engineBitDepth", internalBitDepth)
-            put("gamma", "DigLog8 Flat Gamma v2")
-            put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 programmable pre-encode tone curve")
+            put("gamma", if (usingTenBit) "DigLog10 Gamma v1" else "DigLog GPU Gamma v2")
+            put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 SurfaceTexture → OpenGL ES DigLog shader → encoder surface")
             put("codec", if (usingTenBit) "HEVC Main10" else activeCodec)
             put("audio", if (usingTenBit) false else activeAudio)
             put("bitrate", if (usingTenBit) calculateTenBitBitrate() else calculateBitrate())
@@ -603,7 +619,9 @@ class DigLogCaptureActivity : Activity() {
     }
 
     override fun onDestroy() {
-        digLog10?.stop(); digLog10 = null; closeSession(); camera?.close(); recorder?.release(); stopBackground(); super.onDestroy()
+        digLog10?.stop(); digLog10 = null
+        digLog8Gpu?.stop(); digLog8Gpu = null
+        closeSession(); camera?.close(); recorder?.release(); stopBackground(); super.onDestroy()
     }
 
     private fun startBackground() { backgroundThread = HandlerThread("DigLogCamera").also { it.start() }; background = Handler(backgroundThread!!.looper) }
