@@ -85,7 +85,8 @@ class DigLog10Engine(
                 set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL)
                 set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF)
                 set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_OFF)
-                set(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_BYPASS)
+                // No public Camera2 TONEMAP_MODE_BYPASS constant exists.
+                // The custom DigLog transfer curve is applied later in the 10-bit GPU shader.
                 set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
             }
             val outputs = mutableListOf(reader.surface).apply { previewSurface?.let { add(it) } }
