@@ -3,6 +3,9 @@ package com.example.digitor
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import android.graphics.Color
 import android.hardware.camera2.*
 import android.hardware.camera2.params.TonemapCurve
@@ -38,11 +41,16 @@ class DigLogCaptureActivity : Activity() {
         const val EXTRA_BIT_DEPTH = "bitDepth"
         const val EXTRA_OUTPUT_PATH = "outputPath"
         private const val REQUEST_PERMISSIONS = 6001
+        private const val REQUEST_OUTPUT_FOLDER = 6002
+        private const val PREFS = "diglog_capture"
+        private const val PREF_OUTPUT_TREE = "output_tree_uri"
     }
 
     private lateinit var preview: TextureView
     private lateinit var status: TextView
     private lateinit var record: Button
+    private lateinit var locationButton: Button
+    private lateinit var locationLabel: TextView
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var recorder: MediaRecorder? = null
@@ -59,11 +67,14 @@ class DigLogCaptureActivity : Activity() {
     private var activeCodec = "H.264"
     private var activeBitrate = 12_000_000
     private var activeAudio = true
+    private var selectedOutputTree: Uri? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cameraId = intent.getStringExtra(EXTRA_CAMERA_ID) ?: run { finishCanceled("Camera unavailable"); return }
         internalBitDepth = intent.getIntExtra(EXTRA_BIT_DEPTH, 8)
+        selectedOutputTree = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getString(PREF_OUTPUT_TREE, null)?.let(Uri::parse)
         buildUi()
         if (hasPermissions()) startWhenReady() else ActivityCompat.requestPermissions(
             this, arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO), REQUEST_PERMISSIONS
@@ -84,13 +95,72 @@ class DigLogCaptureActivity : Activity() {
         }
         root.addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = 42 })
 
+        val bottomPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(24, 16, 24, 24)
+            setBackgroundColor(0x55000000)
+        }
+
+        locationLabel = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            gravity = Gravity.CENTER
+            text = outputLocationText()
+        }
+        bottomPanel.addView(locationLabel, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10 })
+
+        locationButton = Button(this).apply {
+            text = "SELECT SAVE LOCATION"
+            setOnClickListener { chooseOutputFolder() }
+        }
+        bottomPanel.addView(locationButton, LinearLayout.LayoutParams(-1, 100).apply { bottomMargin = 12 })
+
         record = Button(this).apply {
             text = "RECORD"
             isEnabled = false
             setOnClickListener { if (recording) stopRecording() else startRecording() }
         }
-        root.addView(record, FrameLayout.LayoutParams(240, 120, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = 64 })
+        bottomPanel.addView(record, LinearLayout.LayoutParams(240, 120))
+
+        root.addView(bottomPanel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         setContentView(root)
+    }
+
+
+    private fun outputLocationText(): String {
+        val uri = selectedOutputTree ?: return "Save location: App storage / DigLog"
+        val name = uri.lastPathSegment?.substringAfterLast(':')?.ifBlank { null }
+        return "Save location: ${name ?: "Selected folder"}"
+    }
+
+    private fun chooseOutputFolder() {
+        if (recording) {
+            Toast.makeText(this, "Stop recording before changing the save location.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val picker = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+            selectedOutputTree?.let { putExtra("android.provider.extra.INITIAL_URI", it) }
+        }
+        startActivityForResult(picker, REQUEST_OUTPUT_FOLDER)
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_OUTPUT_FOLDER || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val flags = data.flags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+        selectedOutputTree = uri
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_OUTPUT_TREE, uri.toString()).apply()
+        locationLabel.text = outputLocationText()
+        Toast.makeText(this, "DigLog save location updated.", Toast.LENGTH_SHORT).show()
     }
 
     private fun hasPermissions() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
@@ -256,8 +326,13 @@ class DigLogCaptureActivity : Activity() {
         if (!success || file == null || !file.exists() || file.length() == 0L) {
             file?.delete(); finishCanceled("Recording failed"); return
         }
-        writeMetadata(file)
-        setResult(RESULT_OK, intent.apply { putExtra(EXTRA_OUTPUT_PATH, file.absolutePath) })
+        val metadataFile = writeMetadata(file)
+        val savedPath = runCatching { publishToSelectedFolder(file, metadataFile) }
+            .getOrElse {
+                Toast.makeText(this, "Selected folder could not be used. Saved in app storage.", Toast.LENGTH_LONG).show()
+                file.absolutePath
+            }
+        setResult(RESULT_OK, intent.apply { putExtra(EXTRA_OUTPUT_PATH, savedPath) })
         finish()
     }
 
@@ -422,7 +497,7 @@ class DigLogCaptureActivity : Activity() {
         return File(dir, "DIGLOG_$stamp.mp4")
     }
 
-    private fun writeMetadata(file: File) {
+    private fun writeMetadata(file: File): File {
         val json = JSONObject().apply {
             put("profile", "DigLog")
             put("engineBitDepth", internalBitDepth)
@@ -440,7 +515,45 @@ class DigLogCaptureActivity : Activity() {
             put("stabilization", "OFF")
             put("createdAt", System.currentTimeMillis())
         }
-        File(file.parentFile, file.nameWithoutExtension + ".diglog.json").writeText(json.toString(2))
+        return File(file.parentFile, file.nameWithoutExtension + ".diglog.json").apply {
+            writeText(json.toString(2))
+        }
+    }
+
+    private fun publishToSelectedFolder(video: File, metadata: File): String {
+        val tree = selectedOutputTree ?: return video.absolutePath
+        val parentDocument = DocumentsContract.buildDocumentUriUsingTree(
+            tree,
+            DocumentsContract.getTreeDocumentId(tree),
+        )
+        val videoUri = DocumentsContract.createDocument(
+            contentResolver,
+            parentDocument,
+            "video/mp4",
+            video.name,
+        ) ?: throw IllegalStateException("Could not create the video in the selected folder")
+
+        contentResolver.openOutputStream(videoUri, "w")?.use { output ->
+            video.inputStream().use { input -> input.copyTo(output) }
+        } ?: throw IllegalStateException("Could not write the video")
+
+        runCatching {
+            val metadataUri = DocumentsContract.createDocument(
+                contentResolver,
+                parentDocument,
+                "application/json",
+                metadata.name,
+            )
+            if (metadataUri != null) {
+                contentResolver.openOutputStream(metadataUri, "w")?.use { output ->
+                    metadata.inputStream().use { input -> input.copyTo(output) }
+                }
+            }
+        }
+
+        video.delete()
+        metadata.delete()
+        return videoUri.toString()
     }
 
     private fun closeSession() { session?.close(); session = null }
