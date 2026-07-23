@@ -28,6 +28,7 @@ import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
@@ -73,6 +74,8 @@ class DigLogCaptureActivity : Activity() {
     private var fallbackReason: String? = null
     private var tenBitFallbackStarted = false
     private var selectedOutputTree: Uri? = null
+    // Lifecycle callbacks may race with stop/error delivery; publish exactly one result.
+    private val completionDelivered = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -253,6 +256,7 @@ class DigLogCaptureActivity : Activity() {
     }
 
     private fun startRecording() {
+        completionDelivered.set(false)
         val capability = DigLogCapabilityDetector(this).detect()
         tenBitFallbackStarted = false
         fallbackReason = null
@@ -370,8 +374,7 @@ class DigLogCaptureActivity : Activity() {
                 Toast.makeText(this, "Selected folder could not be used. Saved in app storage.", Toast.LENGTH_LONG).show()
                 file.absolutePath
             }
-        setResult(RESULT_OK, intent.apply { putExtra(EXTRA_OUTPUT_PATH, savedPath) })
-        finish()
+        finishSuccess(savedPath)
     }
 
     private fun applyDigLogControls(builder: CaptureRequest.Builder, applyToneCurve: Boolean = true) {
@@ -616,7 +619,14 @@ class DigLogCaptureActivity : Activity() {
     }
 
     private fun closeSession() { session?.close(); session = null }
+    private fun finishSuccess(savedPath: String) {
+        if (!completionDelivered.compareAndSet(false, true)) return
+        setResult(RESULT_OK, intent.apply { putExtra(EXTRA_OUTPUT_PATH, savedPath) })
+        finish()
+    }
+
     private fun finishCanceled(message: String) {
+        if (!completionDelivered.compareAndSet(false, true)) return
         setResult(RESULT_CANCELED, intent.apply { putExtra("error", message) })
         runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); finish() }
     }
