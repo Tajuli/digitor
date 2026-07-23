@@ -7,9 +7,16 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CameraManager
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
+import android.media.MediaRecorder
 import android.os.Build
 
-/** Strict capability gate. DigLog is never exposed as a cosmetic flat filter. */
+/**
+ * Flexible capability detector.
+ *
+ * DigLog 10 is selected only when the complete P010/Main10 path exists.
+ * Low-end devices can still use the compatible 8-bit engine when a rear
+ * Camera2 stream and at least AVC/HEVC hardware encoding are available.
+ */
 class DigLogCapabilityDetector(private val context: Context) {
     data class Result(
         val available: Boolean,
@@ -41,12 +48,13 @@ class DigLogCapabilityDetector(private val context: Context) {
 
     fun detect(): Result {
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val hevc = hasHevcEncoder(false)
-        val main10 = hasHevcEncoder(true)
+        val hevc = hasEncoder("video/hevc")
+        val avc = hasEncoder("video/avc")
+        val main10 = hasHevcMain10Encoder()
 
-        var bestFailure = "No rear camera exposes the controls required by DigLog."
+        var fallback: Result? = null
         for (id in manager.cameraIdList) {
-            val c = manager.getCameraCharacteristics(id)
+            val c = runCatching { manager.getCameraCharacteristics(id) }.getOrNull() ?: continue
             if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
 
             val level = c.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
@@ -56,37 +64,60 @@ class DigLogCapabilityDetector(private val context: Context) {
             val manualPost = caps.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
             val toneModes = c.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
             val toneCurve = toneModes.contains(CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
-            val suitableLevel = level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
-                level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
-            val p010 = if (Build.VERSION.SDK_INT >= 33) {
+            val p010 = Build.VERSION.SDK_INT >= 33 &&
                 c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                     ?.outputFormats?.contains(ImageFormat.YCBCR_P010) == true
-            } else false
 
-            val available = suitableLevel && manualSensor && manualPost && toneCurve && hevc
-            if (available) {
-                // Select the hidden 10-bit engine only when the complete public Android path exists.
-                // Otherwise the same DigLog UI automatically uses the strict 8-bit engine.
-                val depth = if (Build.VERSION.SDK_INT >= 33 && p010 && main10) 10 else 8
-                return Result(true, id, depth, "DigLog ready", levelName, manualSensor, manualPost, toneCurve, hevc, main10, p010)
+            val hasRecordSize = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(MediaRecorder::class.java)
+                ?.isNotEmpty() == true
+
+            val professionalLevel = level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+            val supportsTenBit = professionalLevel && manualSensor && manualPost &&
+                toneCurve && p010 && main10
+
+            if (supportsTenBit) {
+                return Result(
+                    true, id, 10, "DigLog 10 ready", levelName,
+                    manualSensor, manualPost, toneCurve, hevc, main10, p010,
+                )
             }
-            bestFailure = when {
-                !suitableLevel -> "Camera hardware level $levelName cannot preserve enough controllable image data."
-                !manualSensor -> "Manual sensor control is not exposed by this camera."
-                !manualPost -> "Manual post-processing control is not exposed by this camera."
-                !toneCurve -> "A programmable tone curve is not exposed by this camera."
-                !hevc -> "A hardware HEVC encoder is not available."
-                else -> bestFailure
+
+            // Flexible low-end path: LEGACY/LIMITED cameras are accepted when they can
+            // create a normal video stream and the device has AVC or HEVC encoding.
+            if (hasRecordSize && (hevc || avc) && fallback == null) {
+                fallback = Result(
+                    true, id, 8, "Compatible DigLog engine ready", levelName,
+                    manualSensor, manualPost, toneCurve, hevc, main10, p010,
+                )
             }
         }
-        return Result(false, null, 0, bestFailure, "Unavailable", false, false, false, hevc, main10, false)
+
+        return fallback ?: Result(
+            false,
+            null,
+            0,
+            "No rear camera with a compatible video encoder is available.",
+            "Unavailable",
+            false,
+            false,
+            false,
+            hevc,
+            main10,
+            false,
+        )
     }
 
-    private fun hasHevcEncoder(requireMain10: Boolean): Boolean {
-        return MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
+    private fun hasEncoder(mime: String): Boolean =
+        MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
+            info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+        }
+
+    private fun hasHevcMain10Encoder(): Boolean =
+        MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
             if (!info.isEncoder) return@any false
             val type = info.supportedTypes.firstOrNull { it.equals("video/hevc", true) } ?: return@any false
-            if (!requireMain10) return@any true
             runCatching {
                 info.getCapabilitiesForType(type).profileLevels.any { p ->
                     p.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
@@ -95,7 +126,6 @@ class DigLogCapabilityDetector(private val context: Context) {
                 }
             }.getOrDefault(false)
         }
-    }
 
     private fun hardwareLevelName(level: Int?): String = when (level) {
         CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3 -> "LEVEL_3"
