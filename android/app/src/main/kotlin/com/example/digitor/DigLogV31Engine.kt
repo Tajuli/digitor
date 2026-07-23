@@ -53,28 +53,35 @@ class DigLogV31Engine(
     private var codecLabel = "HEVC Main10"
     private val running = AtomicBoolean(false)
     private val failed = AtomicBoolean(false)
+    private val diagnostics = RecordingPipelineDiagnostics("DigLog V3.1", background, ::fail)
 
     override fun start() { background.post { startWorker() } }
 
     private fun startWorker() {
         try {
+            diagnostics.begin()
             require(Build.VERSION.SDK_INT >= 33) { "P010 ImageReader requires Android 13+" }
             configureMain10Encoder()
-            renderer = P010Renderer(inputSurface!!, size.width, size.height)
+            renderer = P010Renderer(inputSurface!!, size.width, size.height, diagnostics)
             reader = ImageReader.newInstance(size.width, size.height, ImageFormat.YCBCR_P010, 3).also { r ->
                 r.setOnImageAvailableListener({ source ->
                     val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
                     try {
                         if (!running.get()) return@setOnImageAvailableListener
+                        diagnostics.imageTimestamp(image.timestamp)
+                        diagnostics.mark(2)
                         val pts = if (firstTimestamp < 0L) {
                             firstTimestamp = image.timestamp
                             0L
                         } else (image.timestamp - firstTimestamp).coerceAtLeast(lastTimestamp + 1L)
                         lastTimestamp = pts
-                        renderer!!.draw(P010FrameConverter.copy(image), pts)
+                        val frame = P010FrameConverter.copy(image)
+                        diagnostics.mark(3)
+                        renderer!!.draw(frame, pts)
+                        diagnostics.mark(7)
                         drain(false)
                     } catch (t: Throwable) {
-                        fail("10-bit frame path failed: ${t.message ?: t.javaClass.simpleName}")
+                        fail(diagnostics.stopped("${t.message ?: t.javaClass.simpleName}"))
                     } finally {
                         image.close()
                     }
@@ -92,17 +99,20 @@ class DigLogV31Engine(
                     try {
                         session = value
                         codec!!.start()
+                        diagnostics.mark(0)
+                        diagnostics.mark(1)
+                        diagnostics.mark(8)
                         running.set(true)
                         value.setRepeatingRequest(request.build(), null, background)
                         onReady(codecLabel)
-                    } catch (t: Throwable) { fail("10-bit session start failed: ${t.message}") }
+                } catch (t: Throwable) { fail(diagnostics.stopped("session start failed: ${t.message ?: t.javaClass.simpleName}")) }
                 }
                 override fun onConfigureFailed(value: CameraCaptureSession) {
-                    value.close(); fail("Camera rejected the combined P010 + preview session")
+                    value.close(); fail(diagnostics.stopped("camera rejected the combined P010 + preview session"))
                 }
             }, background)
         } catch (t: Throwable) {
-            release(); fail("DigLog V3.1 unavailable: ${t.message ?: t.javaClass.simpleName}")
+            release(); fail(diagnostics.stopped("unavailable: ${t.message ?: t.javaClass.simpleName}"))
         }
     }
 
@@ -158,10 +168,16 @@ class DigLogV31Engine(
         return try {
             runCatching { session?.stopRepeating() }; runCatching { session?.abortCaptures() }
             codec?.signalEndOfInputStream()
+            diagnostics.expect(13)
             var polls = 0
             while (polls++ < 250 && drain(true)) Unit
+            check(diagnostics.completed(13)) { diagnostics.stopped("encoder did not deliver EOS") }
             true
-        } catch (_: Throwable) { false } finally { release() }
+        } catch (t: Throwable) {
+            fail(if (t.message?.contains("recording pipeline stopped at stage:") == true) t.message!!
+                else diagnostics.stopped(t.message ?: t.javaClass.simpleName))
+            false
+        } finally { release() }
     }
 
     private fun drain(eos: Boolean): Boolean {
@@ -172,6 +188,7 @@ class DigLogV31Engine(
             when {
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> return eos
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    diagnostics.mark(9)
                     check(!muxerStarted)
                     val out = encoder.outputFormat
                     val profile = if (out.containsKey(MediaFormat.KEY_PROFILE)) out.getInteger(MediaFormat.KEY_PROFILE) else -1
@@ -181,17 +198,20 @@ class DigLogV31Engine(
                         "Encoder output is not Main10 (profile=$profile)"
                     }
                     track = muxer!!.addTrack(out); muxer!!.start(); muxerStarted = true
+                    diagnostics.mark(10)
                 }
                 index >= 0 -> {
+                    diagnostics.mark(11, "size=${info.size}, flags=${info.flags}")
                     val data = encoder.getOutputBuffer(index)
                     if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
                     if (data != null && info.size > 0 && muxerStarted) {
                         data.position(info.offset); data.limit(info.offset + info.size)
                         muxer!!.writeSampleData(track, data, info); encodedSamples++
+                        diagnostics.mark(12, "pts=${info.presentationTimeUs}, size=${info.size}")
                     }
                     val done = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
-                    if (done) return false
+                    if (done) { diagnostics.mark(13); return false }
                 }
             }
         }
@@ -212,11 +232,12 @@ class DigLogV31Engine(
         runCatching { renderer?.release() }; renderer = null
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
         if (muxerStarted) muxerStopped = runCatching { muxer?.stop() }.isSuccess
+        if (muxerStopped) diagnostics.mark(14)
         runCatching { muxer?.release() }; muxer = null
         runCatching { inputSurface?.release() }; inputSurface = null
     }
 
-    private class P010Renderer(surface: Surface, private val width: Int, private val height: Int) {
+    private class P010Renderer(surface: Surface, private val width: Int, private val height: Int, private val diagnostics: RecordingPipelineDiagnostics) {
         private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         private val context: EGLContext
         private val window: EGLSurface
@@ -232,7 +253,9 @@ class DigLogV31Engine(
             val attrs = intArrayOf(
                 EGL14.EGL_RED_SIZE,10, EGL14.EGL_GREEN_SIZE,10, EGL14.EGL_BLUE_SIZE,10, EGL14.EGL_ALPHA_SIZE,2,
                 EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES3_BIT_KHR,
-                EGL14.EGL_SURFACE_TYPE,EGL14.EGL_WINDOW_BIT, EGL14.EGL_NONE)
+                EGL14.EGL_SURFACE_TYPE,EGL14.EGL_WINDOW_BIT,
+                EGL_RECORDABLE_ANDROID, 1,
+                EGL14.EGL_NONE)
             check(EGL14.eglChooseConfig(display,attrs,0,configs,0,1,count,0) && count[0] > 0) { "No RGB10_A2 EGL config" }
             val cfg = configs[0]!!
             context = EGL14.eglCreateContext(display,cfg,EGL14.EGL_NO_CONTEXT,intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION,3,EGL14.EGL_NONE),0)
@@ -254,13 +277,17 @@ class DigLogV31Engine(
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D,0,GLES30.GL_R16UI,frame.width,frame.height,0,GLES30.GL_RED_INTEGER,GLES30.GL_UNSIGNED_SHORT,frame.y)
             frame.uv.position(0); GLES30.glActiveTexture(GLES30.GL_TEXTURE1); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D,textures[1])
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D,0,GLES30.GL_RG16UI,frame.width/2,frame.height/2,0,GLES30.GL_RG_INTEGER,GLES30.GL_UNSIGNED_SHORT,frame.uv)
+            diagnostics.mark(4)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(program,"uY"),0); GLES30.glUniform1i(GLES30.glGetUniformLocation(program,"uUV"),1)
             val pos=GLES30.glGetAttribLocation(program,"aPos"); val tex=GLES30.glGetAttribLocation(program,"aTex")
             vertices.position(0); GLES30.glVertexAttribPointer(pos,2,GLES30.GL_FLOAT,false,16,vertices); GLES30.glEnableVertexAttribArray(pos)
             vertices.position(2); GLES30.glVertexAttribPointer(tex,2,GLES30.GL_FLOAT,false,16,vertices); GLES30.glEnableVertexAttribArray(tex)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP,0,4)
+            check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "10-bit shader draw failed" }
+            diagnostics.mark(5)
             EGLExt.eglPresentationTimeANDROID(display,window,pts)
             check(EGL14.eglSwapBuffers(display,window)) { "10-bit encoder swap failed" }
+            diagnostics.mark(6)
         }
         fun release() {
             runCatching { EGL14.eglMakeCurrent(display,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_CONTEXT) }
@@ -271,6 +298,7 @@ class DigLogV31Engine(
             val vs=shader(GLES30.GL_VERTEX_SHADER,v); val fs=shader(GLES30.GL_FRAGMENT_SHADER,f); val p=GLES30.glCreateProgram(); GLES30.glAttachShader(p,vs); GLES30.glAttachShader(p,fs); GLES30.glLinkProgram(p); val ok=IntArray(1); GLES30.glGetProgramiv(p,GLES30.GL_LINK_STATUS,ok,0); check(ok[0]!=0){GLES30.glGetProgramInfoLog(p)}; GLES30.glDeleteShader(vs); GLES30.glDeleteShader(fs); return p
         }
         companion object {
+            private const val EGL_RECORDABLE_ANDROID = 0x3142
             const val VERTEX = """#version 300 es
 in vec2 aPos; in vec2 aTex; out vec2 vTex; void main(){gl_Position=vec4(aPos,0.0,1.0);vTex=aTex;}"""
             const val FRAGMENT = """#version 300 es
