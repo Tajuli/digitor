@@ -56,6 +56,9 @@ class DigLogV3Engine(
     private var codecLabel = "H.264"
     private var encodedSamples = 0
     private var imageCount = 0
+    private val yBuffer = ByteBuffer.allocateDirect(size.width * size.height)
+    private val uBuffer = ByteBuffer.allocateDirect((size.width / 2) * (size.height / 2))
+    private val vBuffer = ByteBuffer.allocateDirect((size.width / 2) * (size.height / 2))
     private var muxerStopped = false
     private var eosSubmitted = false
     private var eosReceived = false
@@ -100,7 +103,7 @@ class DigLogV3Engine(
                         0L
                     } else (image.timestamp - firstTimestampNs).coerceAtLeast(lastPresentationNs + 1L)
                     lastPresentationNs = pts
-                    val frame = YuvFrame.from(image)
+                    val frame = YuvFrame.from(image, yBuffer, uBuffer, vBuffer)
                     diagnostics.mark(RecordingPipelineDiagnostics.YUV_COPY_COMPLETE)
                     renderer?.draw(frame, pts)
                     diagnostics.mark(RecordingPipelineDiagnostics.ENCODER_INPUT_FRAME_SUBMITTED, "pts=$pts")
@@ -351,12 +354,17 @@ class DigLogV3Engine(
         val height: Int,
     ) {
         companion object {
-            fun from(image: Image): YuvFrame {
+            fun from(
+                image: Image,
+                yBuffer: ByteBuffer,
+                uBuffer: ByteBuffer,
+                vBuffer: ByteBuffer,
+            ): YuvFrame {
                 require(image.format == ImageFormat.YUV_420_888)
                 return YuvFrame(
-                    Yuv420FrameConverter.copyPlane(image.planes[0], image.width, image.height),
-                    Yuv420FrameConverter.copyPlane(image.planes[1], image.width / 2, image.height / 2),
-                    Yuv420FrameConverter.copyPlane(image.planes[2], image.width / 2, image.height / 2),
+                    Yuv420FrameConverter.copyPlaneInto(image.planes[0], image.width, image.height, yBuffer),
+                    Yuv420FrameConverter.copyPlaneInto(image.planes[1], image.width / 2, image.height / 2, uBuffer),
+                    Yuv420FrameConverter.copyPlaneInto(image.planes[2], image.width / 2, image.height / 2, vBuffer),
                     image.width,
                     image.height,
                 )
@@ -371,6 +379,9 @@ class DigLogV3Engine(
         private val eglSurface: EGLSurface
         private val program: Int
         private val textures = IntArray(3)
+        private val positionLocation: Int
+        private val texCoordLocation: Int
+        private val samplerLocations = IntArray(3)
         private val vertices: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
                 put(floatArrayOf(
@@ -408,12 +419,26 @@ class DigLogV3Engine(
             check(EGL14.eglMakeCurrent(display, eglSurface, eglSurface, context)) { "EGL makeCurrent failed" }
             program = createProgram(VERTEX, FRAGMENT)
             GLES30.glGenTextures(3, textures, 0)
-            textures.forEach { id ->
+            textures.forEachIndexed { index, id ->
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, id)
                 GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
                 GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
                 GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
                 GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                val textureWidth = if (index == 0) width else width / 2
+                val textureHeight = if (index == 0) height else height / 2
+                // Allocate GPU texture storage once. Per-frame glTexImage2D caused
+                // a full texture reallocation and was the main low-FPS bottleneck.
+                GLES30.glTexImage2D(
+                    GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8,
+                    textureWidth, textureHeight, 0,
+                    GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null,
+                )
+            }
+            positionLocation = GLES30.glGetAttribLocation(program, "aPos")
+            texCoordLocation = GLES30.glGetAttribLocation(program, "aTex")
+            arrayOf("uY", "uU", "uV").forEachIndexed { index, name ->
+                samplerLocations[index] = GLES30.glGetUniformLocation(program, name)
             }
         }
 
@@ -426,18 +451,16 @@ class DigLogV3Engine(
             upload(2, frame.width / 2, frame.height / 2, frame.v)
             diagnostics.mark(RecordingPipelineDiagnostics.TEXTURE_UPLOAD_COMPLETE)
 
-            val pos = GLES30.glGetAttribLocation(program, "aPos")
-            val tex = GLES30.glGetAttribLocation(program, "aTex")
             vertices.position(0)
-            GLES30.glVertexAttribPointer(pos, 2, GLES30.GL_FLOAT, false, 16, vertices)
-            GLES30.glEnableVertexAttribArray(pos)
+            GLES30.glVertexAttribPointer(positionLocation, 2, GLES30.GL_FLOAT, false, 16, vertices)
+            GLES30.glEnableVertexAttribArray(positionLocation)
             vertices.position(2)
-            GLES30.glVertexAttribPointer(tex, 2, GLES30.GL_FLOAT, false, 16, vertices)
-            GLES30.glEnableVertexAttribArray(tex)
+            GLES30.glVertexAttribPointer(texCoordLocation, 2, GLES30.GL_FLOAT, false, 16, vertices)
+            GLES30.glEnableVertexAttribArray(texCoordLocation)
             for (i in 0..2) {
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + i)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[i])
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program, arrayOf("uY", "uU", "uV")[i]), i)
+                GLES30.glUniform1i(samplerLocations[i], i)
             }
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             checkGl("Shader draw")
@@ -456,7 +479,10 @@ class DigLogV3Engine(
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + index)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[index])
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, w, h, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, data)
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, data,
+            )
         }
 
         fun release() {
