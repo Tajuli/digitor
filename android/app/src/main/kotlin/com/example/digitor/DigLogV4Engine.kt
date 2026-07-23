@@ -8,16 +8,9 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
-import android.opengl.EGLExt
-import android.opengl.EGLSurface
-import android.opengl.GLES11Ext
-import android.opengl.GLES30
+import android.opengl.*
 import android.os.Handler
-import android.os.SystemClock
+import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
 import android.view.Surface
@@ -29,592 +22,169 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * DigLog V4 zero-copy 8-bit recording engine.
- *
- * Camera2 writes directly into one external-OES SurfaceTexture. The same GPU
- * texture is drawn by the DigLog shader to both the TextureView preview surface
- * and MediaCodec's input surface. No ImageReader, YUV plane copy, CPU colour
- * conversion, or per-frame texture upload is involved.
- *
- * Pipeline:
- * Camera2 -> SurfaceTexture/OES -> DigLog GLSL -> preview + encoder EGL surfaces
- * -> MediaCodec -> MediaMuxer.
- */
+/** Grafika-style, zero-copy Camera2/OES/MediaCodec recorder. */
 class DigLogV4Engine(
-    private val camera: CameraDevice,
-    private val size: Size,
-    private val fps: Int,
-    private val bitrate: Int,
-    private val output: File,
-    private val previewSurface: Surface,
-    private val background: Handler,
-    private val configureRequest: (CaptureRequest.Builder) -> Unit,
-    private val onReady: (String) -> Unit,
-    private val onError: (String) -> Unit,
+    private val camera: CameraDevice, private val size: Size, private val fps: Int,
+    private val bitrate: Int, private val output: File, private val previewSurface: Surface,
+    private val background: Handler, private val configureRequest: (CaptureRequest.Builder) -> Unit,
+    private val onReady: (String) -> Unit, private val onError: (String) -> Unit,
 ) : DigLogEngine {
-    private companion object {
-        const val TAG = "DigLogV4"
-        const val EOS_DRAIN_TIMEOUT_MS = 5_000L
-    }
+    companion object { private const val TAG = "DigLogV4" }
+    override val actualBitDepth = 8
+    override val codecName get() = codecLabel
+    private val glThread = HandlerThread("DigLogV4-GL").apply { start() }
+    private val codecThread = HandlerThread("DigLogV4-Codec").apply { start() }
+    private val gl = Handler(glThread.looper)
+    private val codecHandler = Handler(codecThread.looper)
+    private val started = AtomicBoolean(false); private val stopping = AtomicBoolean(false)
+    private val released = AtomicBoolean(false); private val framePending = AtomicBoolean(false)
+    @Volatile private var failed = false; @Volatile private var session: CameraCaptureSession? = null
+    @Volatile private var codec: MediaCodec? = null; @Volatile private var muxer: MediaMuxer? = null
+    @Volatile private var encoderSurface: Surface? = null; @Volatile private var renderer: Renderer? = null
+    @Volatile private var muxerStarted = false; @Volatile private var muxerStopped = false
+    @Volatile private var eosReceived = false; @Volatile private var samples = 0; @Volatile private var frames = 0
+    private var track = -1; private var codecLabel = "HEVC"
+    private val continuousDrain = object : Runnable { override fun run() {
+        try { if (started.get() && !stopping.get()) { codec?.let { drain(it, MediaCodec.BufferInfo(), 0) }; codecHandler.postDelayed(this, 8) } }
+        catch (t: Throwable) { fail("continuous encoder drain failed", t) }
+    } }
 
-    override val actualBitDepth: Int = 8
-    override val codecName: String get() = codecLabel
-
-    private var session: CameraCaptureSession? = null
-    private var codec: MediaCodec? = null
-    private var muxer: MediaMuxer? = null
-    private var encoderSurface: Surface? = null
-    private var renderer: OesDigLogRenderer? = null
-    private var cameraInputSurface: Surface? = null
-
-    private var trackIndex = -1
-    private var codecLabel = "H.264"
-    private var encodedSamples = 0
-    private var renderedFrames = 0
-    private var muxerStarted = false
-    private var muxerStopped = false
-    private var eosSubmitted = false
-    private var eosReceived = false
-    private var eosTimedOut = false
-    private var fatalError = false
-
-    private val running = AtomicBoolean(false)
-    private val stopping = AtomicBoolean(false)
-    private val failed = AtomicBoolean(false)
-    private val resourcesReleased = AtomicBoolean(false)
-    private val frameScheduled = AtomicBoolean(false)
-
-    private val codecDrain = object : Runnable {
-        override fun run() {
-            if (!running.get() || failed.get()) return
-            try {
-                drainEncoder(false)
-                background.postDelayed(this, 8L)
-            } catch (t: Throwable) {
-                failOnce("continuous encoder drain failed: ${t.message ?: t.javaClass.simpleName}")
-            }
-        }
-    }
-
-    override fun start() {
-        background.post { startOnWorker() }
-    }
-
-    private fun startOnWorker() {
+    override fun start() { background.post { initialize() } }
+    private fun initialize() {
         try {
-            configureEncoderWithFallback()
-            val activeRenderer = OesDigLogRenderer(
-                encoderWindow = requireNotNull(encoderSurface),
-                previewWindow = previewSurface,
-                bufferWidth = size.width,
-                bufferHeight = size.height,
-            )
-            renderer = activeRenderer
-            cameraInputSurface = activeRenderer.cameraSurface
-
-            activeRenderer.setFrameListener(background) {
-                // Some devices can deliver callbacks faster than a frame can be
-                // rendered. Coalesce callbacks while always consuming the newest
-                // SurfaceTexture image, preventing an unbounded handler backlog.
-                if (!running.get() || !frameScheduled.compareAndSet(false, true)) return@setFrameListener
-                background.post {
-                    try {
-                        if (!running.get()) return@post
-                        val timestampNs = activeRenderer.drawLatestFrame()
-                        renderedFrames++
-                        if (renderedFrames <= 3 || renderedFrames % 30 == 0) {
-                            Log.d(TAG, "Rendered frame count=$renderedFrames, timestamp=$timestampNs")
-                        }
-                        drainEncoder(false)
-                    } catch (t: Throwable) {
-                        failOnce("frame render failed: ${t.message ?: t.javaClass.simpleName}")
-                    } finally {
-                        frameScheduled.set(false)
-                    }
-                }
+            configureEncoder()
+            val ready = CountDownLatch(1); var error: Throwable? = null
+            gl.post {
+                try { renderer = Renderer(requireNotNull(encoderSurface), previewSurface, size) } catch (t: Throwable) { error = t }
+                ready.countDown()
             }
-
-            val cameraSurface = requireNotNull(cameraInputSurface)
-            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(cameraSurface)
-                configureRequest(this)
-            }
-
-            camera.createCaptureSession(listOf(cameraSurface), object : CameraCaptureSession.StateCallback() {
+            check(ready.await(5, TimeUnit.SECONDS)) { "GL initialization timed out" }
+            error?.let { throw it }
+            val cameraTarget = requireNotNull(renderer).cameraSurface
+            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply { addTarget(cameraTarget); configureRequest(this) }
+            camera.createCaptureSession(listOf(cameraTarget), object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(value: CameraCaptureSession) {
-                    if (failed.get()) {
-                        value.close()
-                        return
-                    }
+                    if (stopping.get()) { value.close(); return }
+                    session = value
                     try {
-                        session = value
-                        codec?.start()
-                        running.set(true)
-                        background.post(codecDrain)
+                        val codecStarted = CountDownLatch(1); var codecStartError: Throwable? = null
+                        codecHandler.post { try { codec?.start() } catch (t: Throwable) { codecStartError = t } finally { codecStarted.countDown() } }
+                        check(codecStarted.await(2, TimeUnit.SECONDS)) { "encoder start timed out" }
+                        codecStartError?.let { throw it }
+                        started.set(true)
+                        codecHandler.post(continuousDrain)
                         value.setRepeatingRequest(request.build(), null, background)
-                        Log.d(TAG, "V4 zero-copy capture session configured")
+                        Log.d(TAG, "Camera2 session configured")
                         onReady(codecLabel)
-                    } catch (t: Throwable) {
-                        failOnce("session start failed: ${t.message ?: t.javaClass.simpleName}")
-                    }
+                    } catch (t: Throwable) { fail("camera session start failed", t) }
                 }
-
-                override fun onConfigureFailed(value: CameraCaptureSession) {
-                    value.close()
-                    failOnce("camera session could not be configured")
-                }
+                override fun onConfigureFailed(value: CameraCaptureSession) { value.close(); fail("Camera2 session configuration failed", null) }
             }, background)
-        } catch (t: Throwable) {
-            failOnce("could not start: ${t.message ?: t.javaClass.simpleName}")
-        }
+        } catch (t: Throwable) { fail("V4 initialization failed", t) }
     }
 
-    override fun outputIsValid(): Boolean =
-        muxerStarted && muxerStopped && encodedSamples > 0 && renderedFrames > 0 &&
-            !fatalError && !eosTimedOut && output.isFile && output.length() > 1_024L
+    private fun configureEncoder() {
+        var last: Throwable? = null
+        for ((mime, label) in listOf(MediaFormat.MIMETYPE_VIDEO_HEVC to "HEVC", MediaFormat.MIMETYPE_VIDEO_AVC to "H.264")) try {
+            val format = MediaFormat.createVideoFormat(mime, size.width, size.height).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate); setInteger(MediaFormat.KEY_FRAME_RATE, fps); setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                if (android.os.Build.VERSION.SDK_INT >= 24) { setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL); setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709); setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO) }
+            }
+            codec = MediaCodec.createEncoderByType(mime).also { it.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE); encoderSurface = it.createInputSurface() }
+            muxer = MediaMuxer(output.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4); codecLabel = label; return
+        } catch (t: Throwable) { last = t; runCatching { encoderSurface?.release() }; runCatching { codec?.release() }; encoderSurface = null; codec = null }
+        throw IllegalStateException("No supported surface encoder", last)
+    }
 
     override fun stop(): Boolean {
-        if (Thread.currentThread() == background.looper.thread) return stopOnWorker()
-        val finished = CountDownLatch(1)
-        var success = false
-        background.removeCallbacks(codecDrain)
-        background.postAtFrontOfQueue {
-            try {
-                success = stopOnWorker()
-            } finally {
-                finished.countDown()
-            }
-        }
-        return finished.await(8, TimeUnit.SECONDS) && success
+        // Lifecycle callers may invoke this from main. Never wait there.
+        if (Thread.currentThread() == android.os.Looper.getMainLooper().thread) { Thread({ stopBlocking() }, "DigLogV4-stop").start(); return false }
+        return stopBlocking()
     }
-
-    private fun stopOnWorker(): Boolean {
+    private fun stopBlocking(): Boolean {
         if (!stopping.compareAndSet(false, true)) return outputIsValid()
-        if (!running.getAndSet(false)) {
-            releaseResources()
-            return false
-        }
-
-        return try {
-            session?.let { activeSession ->
-                runCatching { activeSession.stopRepeating() }
-                runCatching { activeSession.abortCaptures() }
-                runCatching { activeSession.close() }
-            }
-            session = null
-
-            if (!eosSubmitted) {
-                codec?.signalEndOfInputStream()
-                eosSubmitted = true
-                Log.d(TAG, "EOS submitted")
-            }
-
-            val deadline = SystemClock.elapsedRealtime() + EOS_DRAIN_TIMEOUT_MS
-            while (!eosReceived && SystemClock.elapsedRealtime() < deadline) {
-                drainEncoder(true)
-            }
-            if (!eosReceived) eosTimedOut = true
-            check(eosReceived) { "timed out waiting for encoder EOS" }
-            check(encodedSamples > 0) { "no encoded frames were written" }
-
-            releaseResources()
-            val valid = outputIsValid()
-            Log.d(
-                TAG,
-                "Output validation: rendered=$renderedFrames, samples=$encodedSamples, " +
-                    "bytes=${output.length()}, success=$valid",
-            )
-            check(valid) { "final output verification failed" }
-            true
-        } catch (t: Throwable) {
-            fatalError = true
-            Log.e(TAG, "Recording finalization failed", t)
-            releaseResources()
-            false
-        }
-    }
-
-    private fun configureEncoderWithFallback() {
-        val options = listOf(
-            MediaFormat.MIMETYPE_VIDEO_HEVC to "HEVC",
-            MediaFormat.MIMETYPE_VIDEO_AVC to "H.264",
-        )
-        var last: Throwable? = null
-        for ((mime, label) in options) {
+        val cameraDone = CountDownLatch(1)
+        background.post { runCatching { session?.stopRepeating(); session?.abortCaptures(); session?.close() }; session = null; cameraDone.countDown() }
+        cameraDone.await(2, TimeUnit.SECONDS)
+        val done = CountDownLatch(1)
+        codecHandler.post {
             try {
-                val format = MediaFormat.createVideoFormat(mime, size.width, size.height).apply {
-                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                    if (android.os.Build.VERSION.SDK_INT >= 24) {
-                        setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL)
-                        setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
-                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
-                    }
-                }
-                codec = MediaCodec.createEncoderByType(mime).also {
-                    it.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    encoderSurface = it.createInputSurface()
-                }
-                muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-                codecLabel = label
-                return
-            } catch (t: Throwable) {
-                last = t
-                runCatching { encoderSurface?.release() }
-                encoderSurface = null
-                runCatching { codec?.release() }
-                codec = null
-                runCatching { muxer?.release() }
-                muxer = null
-            }
+                if (started.get()) { codec?.signalEndOfInputStream(); Log.d(TAG, "EOS submitted"); drainUntilEos() }
+            } catch (t: Throwable) { fail("encoder finalization failed", t) } finally { done.countDown() }
         }
-        throw IllegalStateException("No compatible surface encoder: ${last?.message}")
+        done.await(12, TimeUnit.SECONDS)
+        release()
+        return outputIsValid()
     }
-
-    private fun drainEncoder(end: Boolean): Boolean {
-        val encoder = codec ?: return false
-        val info = MediaCodec.BufferInfo()
-        while (true) {
-            val index = encoder.dequeueOutputBuffer(info, if (end) 10_000 else 0)
-            when {
-                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return false
-                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    check(!muxerStarted) { "Encoder format changed twice" }
-                    trackIndex = requireNotNull(muxer).addTrack(encoder.outputFormat)
-                    requireNotNull(muxer).start()
-                    muxerStarted = true
-                    Log.d(TAG, "MediaMuxer started")
-                }
-                index >= 0 -> {
-                    val data = encoder.getOutputBuffer(index)
-                    if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
-                    if (data != null && info.size > 0 && muxerStarted) {
-                        data.position(info.offset)
-                        data.limit(info.offset + info.size)
-                        requireNotNull(muxer).writeSampleData(trackIndex, data, info)
-                        encodedSamples++
-                        if (encodedSamples <= 3 || encodedSamples % 30 == 0) {
-                            Log.d(TAG, "Encoded frame count=$encodedSamples")
-                        }
-                    }
-                    val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                    encoder.releaseOutputBuffer(index, false)
-                    if (eos) {
-                        eosReceived = true
-                        Log.d(TAG, "Encoder EOS received")
-                        return true
-                    }
-                }
+    private fun drainUntilEos() {
+        val info = MediaCodec.BufferInfo(); val encoder = codec ?: return
+        val deadline = android.os.SystemClock.elapsedRealtime() + 10_000
+        while (!eosReceived && android.os.SystemClock.elapsedRealtime() < deadline) drain(encoder, info, 10_000)
+    }
+    private fun drain(encoder: MediaCodec, info: MediaCodec.BufferInfo, timeoutUs: Long) {
+        while (true) when (val index = encoder.dequeueOutputBuffer(info, timeoutUs)) {
+            MediaCodec.INFO_TRY_AGAIN_LATER -> return
+            MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> { check(!muxerStarted); track = requireNotNull(muxer).addTrack(encoder.outputFormat); Log.d(TAG, "encoder output format changed"); requireNotNull(muxer).start(); muxerStarted = true; Log.d(TAG, "muxer started") }
+            else -> if (index >= 0) {
+                val data = encoder.getOutputBuffer(index)
+                if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
+                if (info.size > 0 && muxerStarted && data != null) { data.position(info.offset); data.limit(info.offset + info.size); requireNotNull(muxer).writeSampleData(track, data, info); if (++samples % 30 == 0) Log.d(TAG, "encoded sample count=$samples") }
+                val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0; encoder.releaseOutputBuffer(index, false)
+                if (eos) { eosReceived = true; Log.d(TAG, "EOS received"); return }
             }
         }
     }
-
-    private fun failOnce(message: String) {
-        if (!failed.compareAndSet(false, true)) return
-        fatalError = true
-        running.set(false)
-        Log.e(TAG, "Recording failed: $message")
-        releaseResources()
-        onError(message)
+    private fun fail(message: String, cause: Throwable?) { if (failed) return; failed = true; Log.e(TAG, message, cause); onError("$message${cause?.message?.let { ": $it" } ?: ""}"); Thread({ stopBlocking() }, "DigLogV4-fail-stop").start() }
+    override fun outputIsValid() = muxerStarted && muxerStopped && samples > 0 && frames > 0 && !failed && output.length() > 1024
+    private fun release() {
+        if (!released.compareAndSet(false, true)) return
+        codecHandler.removeCallbacks(continuousDrain)
+        val eglDone = CountDownLatch(1); gl.post { runCatching { renderer?.release() }; renderer = null; eglDone.countDown() }; eglDone.await(3, TimeUnit.SECONDS)
+        val codecDone = CountDownLatch(1)
+        codecHandler.post {
+            muxer?.let { if (muxerStarted && !muxerStopped && eosReceived) { runCatching { it.stop(); muxerStopped = true }; Log.d(TAG, "final output size=${output.length()}") }; runCatching { it.release() } }; muxer = null
+            codec?.let { runCatching { it.stop() }; runCatching { it.release() } }; codec = null; encoderSurface?.release(); encoderSurface = null
+            codecDone.countDown()
+        }
+        codecDone.await(3, TimeUnit.SECONDS)
+        glThread.quitSafely(); codecThread.quitSafely(); previewSurface.release(); Log.d(TAG, "release completed")
     }
 
-    private fun releaseResources() {
-        if (!resourcesReleased.compareAndSet(false, true)) return
-        running.set(false)
-        background.removeCallbacks(codecDrain)
-
-        session?.let { runCatching { it.close() } }
-        session = null
-
-        muxer?.let { activeMuxer ->
-            if (eosReceived && muxerStarted && !muxerStopped) {
-                muxerStopped = true
-                try {
-                    activeMuxer.stop()
-                    Log.d(TAG, "Muxer stopped; final file size=${output.length()}")
-                } catch (t: Throwable) {
-                    fatalError = true
-                    Log.e(TAG, "Muxer stop failed", t)
-                }
-            }
-            runCatching { activeMuxer.release() }
-        }
-        muxer = null
-
-        codec?.let {
-            runCatching { it.stop() }
-            runCatching { it.release() }
-        }
-        codec = null
-
-        cameraInputSurface?.let { runCatching { it.release() } }
-        cameraInputSurface = null
-        renderer?.let { runCatching { it.release() } }
-        renderer = null
-        encoderSurface?.let { runCatching { it.release() } }
-        encoderSurface = null
-        runCatching { previewSurface.release() }
-    }
-
-    /** Owns the shared EGL context, external camera texture and both windows. */
-    private class OesDigLogRenderer(
-        encoderWindow: Surface,
-        previewWindow: Surface,
-        bufferWidth: Int,
-        bufferHeight: Int,
-    ) {
-        private val display: EGLDisplay
-        private val context: EGLContext
-        private val config: EGLConfig
-        private val encoderEglSurface: EGLSurface
-        private val previewEglSurface: EGLSurface
-        private val oesTexture: Int
-        private val surfaceTexture: SurfaceTexture
+    private inner class Renderer(encoder: Surface, preview: Surface, recordingSize: Size) {
+        private val egl = EglCore(); private val encoderWindow = WindowSurface(egl, encoder); private val previewWindow = WindowSurface(egl, preview)
+        private val rect: FullFrameRect; private val texture: Int
+        private val textureMatrix = FloatArray(16); private val st: SurfaceTexture
         val cameraSurface: Surface
-
-        private val program: Int
-        private val positionLocation: Int
-        private val texCoordLocation: Int
-        private val textureMatrixLocation: Int
-        private val samplerLocation: Int
-        private val textureMatrix = FloatArray(16)
-        private val vertices: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-                put(
-                    floatArrayOf(
-                        -1f, -1f, 0f, 0f,
-                         1f, -1f, 1f, 0f,
-                        -1f,  1f, 0f, 1f,
-                         1f,  1f, 1f, 1f,
-                    ),
-                )
-                flip()
-            }
-
         init {
-            display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-            check(display != EGL14.EGL_NO_DISPLAY) { "No EGL display" }
-            val versions = IntArray(2)
-            check(EGL14.eglInitialize(display, versions, 0, versions, 1)) { "EGL init failed" }
-
-            val configs = arrayOfNulls<EGLConfig>(1)
-            val count = IntArray(1)
-            val attrs = intArrayOf(
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES3_BIT_KHR,
-                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
-                EGL_RECORDABLE_ANDROID, 1,
-                EGL14.EGL_NONE,
-            )
-            check(EGL14.eglChooseConfig(display, attrs, 0, configs, 0, 1, count, 0) && count[0] > 0) {
-                "No recordable EGL config"
-            }
-            config = configs[0]!!
-            context = EGL14.eglCreateContext(
-                display,
-                config,
-                EGL14.EGL_NO_CONTEXT,
-                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE),
-                0,
-            )
-            check(context != EGL14.EGL_NO_CONTEXT) { "EGL context creation failed" }
-
-            encoderEglSurface = createWindowSurface(encoderWindow, "encoder")
-            previewEglSurface = createWindowSurface(previewWindow, "preview")
-            makeCurrent(encoderEglSurface)
-
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            oesTexture = textures[0]
-            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexture)
-            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-            surfaceTexture = SurfaceTexture(oesTexture).apply {
-                setDefaultBufferSize(bufferWidth, bufferHeight)
-            }
-            cameraSurface = Surface(surfaceTexture)
-
-            program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-            positionLocation = GLES30.glGetAttribLocation(program, "aPosition")
-            texCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord")
-            textureMatrixLocation = GLES30.glGetUniformLocation(program, "uTextureMatrix")
-            samplerLocation = GLES30.glGetUniformLocation(program, "uCameraTexture")
-            checkGl("renderer initialization")
+            encoderWindow.makeCurrent()
+            rect = FullFrameRect(Texture2dProgram()); texture = rect.createTextureObject()
+            st = SurfaceTexture(texture).apply { setDefaultBufferSize(recordingSize.width, recordingSize.height) }
+            cameraSurface = Surface(st)
+            Log.d(TAG, "EGL context created"); Log.d(TAG, "preview EGLSurface created"); Log.d(TAG, "encoder EGLSurface created"); Log.d(TAG, "camera OES SurfaceTexture created")
+            st.setOnFrameAvailableListener({
+                if (started.get() && framePending.compareAndSet(false, true)) gl.post { try { render() } catch (t: Throwable) { fail("GL rendering failed", t) } finally { framePending.set(false) } }
+            }, gl)
         }
-
-        fun setFrameListener(handler: Handler, callback: () -> Unit) {
-            surfaceTexture.setOnFrameAvailableListener({ callback() }, handler)
+        private fun render() {
+            st.updateTexImage(); st.getTransformMatrix(textureMatrix); val timestamp = st.timestamp
+            if (frames++ == 0) Log.d(TAG, "first camera frame received")
+            encoderWindow.makeCurrent(); GLES30.glViewport(0, 0, size.width, size.height); rect.drawFrame(texture, textureMatrix); EGLExt.eglPresentationTimeANDROID(egl.display, encoderWindow.surface, timestamp); encoderWindow.swapBuffers()
+            if (frames == 1) Log.d(TAG, "first encoder frame rendered")
+            previewWindow.makeCurrent(); GLES30.glViewport(0, 0, previewWindow.width(), previewWindow.height()); rect.drawFrame(texture, textureMatrix); previewWindow.swapBuffers()
+            if (frames == 1) Log.d(TAG, "first preview frame rendered")
         }
-
-        /** Consumes the newest camera buffer and returns its nanosecond timestamp. */
-        fun drawLatestFrame(): Long {
-            makeCurrent(encoderEglSurface)
-            surfaceTexture.updateTexImage()
-            surfaceTexture.getTransformMatrix(textureMatrix)
-            val timestampNs = surfaceTexture.timestamp
-
-            drawTo(encoderEglSurface, timestampNs, setPresentationTime = true)
-            drawTo(previewEglSurface, timestampNs, setPresentationTime = false)
-            return timestampNs
-        }
-
-        private fun drawTo(target: EGLSurface, timestampNs: Long, setPresentationTime: Boolean) {
-            makeCurrent(target)
-            val width = querySurface(target, EGL14.EGL_WIDTH)
-            val height = querySurface(target, EGL14.EGL_HEIGHT)
-            GLES30.glViewport(0, 0, width, height)
-            GLES30.glUseProgram(program)
-
-            vertices.position(0)
-            GLES30.glVertexAttribPointer(positionLocation, 2, GLES30.GL_FLOAT, false, 16, vertices)
-            GLES30.glEnableVertexAttribArray(positionLocation)
-            vertices.position(2)
-            GLES30.glVertexAttribPointer(texCoordLocation, 2, GLES30.GL_FLOAT, false, 16, vertices)
-            GLES30.glEnableVertexAttribArray(texCoordLocation)
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexture)
-            GLES30.glUniform1i(samplerLocation, 0)
-            GLES30.glUniformMatrix4fv(textureMatrixLocation, 1, false, textureMatrix, 0)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-            checkGl("DigLog shader draw")
-
-            if (setPresentationTime) {
-                EGLExt.eglPresentationTimeANDROID(display, target, timestampNs)
-            }
-            check(EGL14.eglSwapBuffers(display, target)) {
-                "eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
-            }
-        }
-
-        private fun querySurface(surface: EGLSurface, attribute: Int): Int {
-            val value = IntArray(1)
-            check(EGL14.eglQuerySurface(display, surface, attribute, value, 0)) { "eglQuerySurface failed" }
-            return value[0]
-        }
-
-        private fun createWindowSurface(window: Surface, label: String): EGLSurface {
-            val result = EGL14.eglCreateWindowSurface(display, config, window, intArrayOf(EGL14.EGL_NONE), 0)
-            check(result != EGL14.EGL_NO_SURFACE) {
-                "$label EGL surface failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
-            }
-            return result
-        }
-
-        private fun makeCurrent(surface: EGLSurface) {
-            check(EGL14.eglMakeCurrent(display, surface, surface, context)) {
-                "eglMakeCurrent failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
-            }
-        }
-
-        fun release() {
-            surfaceTexture.setOnFrameAvailableListener(null)
-            runCatching { cameraSurface.release() }
-            runCatching { surfaceTexture.release() }
-            runCatching { makeCurrent(encoderEglSurface); GLES30.glDeleteProgram(program) }
-            runCatching { GLES30.glDeleteTextures(1, intArrayOf(oesTexture), 0) }
-            runCatching {
-                EGL14.eglMakeCurrent(
-                    display,
-                    EGL14.EGL_NO_SURFACE,
-                    EGL14.EGL_NO_SURFACE,
-                    EGL14.EGL_NO_CONTEXT,
-                )
-            }
-            runCatching { EGL14.eglDestroySurface(display, previewEglSurface) }
-            runCatching { EGL14.eglDestroySurface(display, encoderEglSurface) }
-            runCatching { EGL14.eglDestroyContext(display, context) }
-            runCatching { EGL14.eglTerminate(display) }
-        }
-
-        private fun checkGl(operation: String) {
-            val error = GLES30.glGetError()
-            check(error == GLES30.GL_NO_ERROR) { "$operation failed: 0x${Integer.toHexString(error)}" }
-        }
-
-        private fun createProgram(vertexSource: String, fragmentSource: String): Int {
-            fun compile(type: Int, source: String): Int {
-                val shader = GLES30.glCreateShader(type)
-                GLES30.glShaderSource(shader, source.trimStart('\uFEFF', '\n', '\r', ' ', '\t'))
-                GLES30.glCompileShader(shader)
-                val status = IntArray(1)
-                GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, status, 0)
-                if (status[0] == 0) {
-                    val log = GLES30.glGetShaderInfoLog(shader)
-                    GLES30.glDeleteShader(shader)
-                    throw IllegalStateException("Shader compilation failed: $log")
-                }
-                return shader
-            }
-
-            val vertex = compile(GLES30.GL_VERTEX_SHADER, vertexSource)
-            val fragment = compile(GLES30.GL_FRAGMENT_SHADER, fragmentSource)
-            val result = GLES30.glCreateProgram()
-            GLES30.glAttachShader(result, vertex)
-            GLES30.glAttachShader(result, fragment)
-            GLES30.glLinkProgram(result)
-            val status = IntArray(1)
-            GLES30.glGetProgramiv(result, GLES30.GL_LINK_STATUS, status, 0)
-            val log = GLES30.glGetProgramInfoLog(result)
-            GLES30.glDeleteShader(vertex)
-            GLES30.glDeleteShader(fragment)
-            check(status[0] != 0) { "Program link failed: $log" }
-            return result
-        }
-
-        companion object {
-            private const val EGL_RECORDABLE_ANDROID = 0x3142
-
-            private const val VERTEX_SHADER = """#version 300 es
-                in vec2 aPosition;
-                in vec2 aTexCoord;
-                uniform mat4 uTextureMatrix;
-                out vec2 vTexCoord;
-                void main() {
-                    gl_Position = vec4(aPosition, 0.0, 1.0);
-                    vTexCoord = (uTextureMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
-                }
-            """
-
-            private const val FRAGMENT_SHADER = """#version 300 es
-                #extension GL_OES_EGL_image_external_essl3 : require
-                precision highp float;
-                uniform samplerExternalOES uCameraTexture;
-                in vec2 vTexCoord;
-                out vec4 fragColor;
-
-                float digLog(float x) {
-                    x = max(x, 0.0);
-                    const float gray = 0.18;
-                    const float toeAtGray = 0.28 * (1.0 - exp(-gray / 0.18));
-                    float encoded = x <= gray
-                        ? 0.28 * (1.0 - exp(-x / 0.18))
-                        : toeAtGray + 0.28 + 0.38 * log(1.0 + 2.4 * (x - gray));
-                    return clamp(encoded, 0.0, 1.0);
-                }
-
-                void main() {
-                    vec3 rgb = clamp(texture(uCameraTexture, vTexCoord).rgb, 0.0, 1.0);
-                    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-                    vec3 chroma = rgb - vec3(luma);
-                    vec3 softened = vec3(luma) + chroma * 0.82;
-                    fragColor = vec4(
-                        digLog(softened.r),
-                        digLog(softened.g),
-                        digLog(softened.b),
-                        1.0
-                    );
-                }
-            """
-        }
+        fun release() { st.setOnFrameAvailableListener(null); cameraSurface.release(); st.release(); rect.release(); encoderWindow.release(); previewWindow.release(); egl.release() }
     }
 }
+
+private class EglCore {
+    val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY); private val config: EGLConfig; val context: EGLContext
+    init { check(display != EGL14.EGL_NO_DISPLAY); check(EGL14.eglInitialize(display, IntArray(1), 0, IntArray(1), 0)); val configs = arrayOfNulls<EGLConfig>(1); val n = IntArray(1); check(EGL14.eglChooseConfig(display, intArrayOf(EGL14.EGL_RED_SIZE,8,EGL14.EGL_GREEN_SIZE,8,EGL14.EGL_BLUE_SIZE,8,EGL14.EGL_ALPHA_SIZE,8,EGL14.EGL_RENDERABLE_TYPE,EGLExt.EGL_OPENGL_ES3_BIT_KHR,EGL14.EGL_SURFACE_TYPE,EGL14.EGL_WINDOW_BIT,0x3142,1,EGL14.EGL_NONE),0,configs,0,1,n,0) && n[0] > 0); config=configs[0]!!; context=EGL14.eglCreateContext(display,config,EGL14.EGL_NO_CONTEXT,intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION,3,EGL14.EGL_NONE),0); check(context != EGL14.EGL_NO_CONTEXT) }
+    fun window(surface: Surface) = EGL14.eglCreateWindowSurface(display, config, surface, intArrayOf(EGL14.EGL_NONE), 0).also { check(it != EGL14.EGL_NO_SURFACE) }
+    fun release() { EGL14.eglMakeCurrent(display,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_CONTEXT); EGL14.eglDestroyContext(display,context); EGL14.eglTerminate(display) }
+}
+private class WindowSurface(private val egl: EglCore, window: Surface) { val surface=egl.window(window); fun makeCurrent() { check(EGL14.eglMakeCurrent(egl.display,surface,surface,egl.context)) }; fun swapBuffers() { check(EGL14.eglSwapBuffers(egl.display,surface)) }; fun width()=query(EGL14.EGL_WIDTH); fun height()=query(EGL14.EGL_HEIGHT); private fun query(a:Int):Int { val v=IntArray(1); EGL14.eglQuerySurface(egl.display,surface,a,v,0); return v[0] }; fun release(){ EGL14.eglDestroySurface(egl.display,surface) } }
+private class FullFrameRect(private val program: Texture2dProgram) { private val vertex: FloatBuffer=ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asFloatBuffer().apply{put(floatArrayOf(-1f,-1f,0f,0f,1f,-1f,1f,0f,-1f,1f,0f,1f,1f,1f,1f,1f));position(0)}; fun createTextureObject():Int { val a=IntArray(1); GLES30.glGenTextures(1,a,0); GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,a[0]); for (p in intArrayOf(GLES30.GL_TEXTURE_MIN_FILTER,GLES30.GL_TEXTURE_MAG_FILTER)) GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,p,GLES30.GL_LINEAR); GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,GLES30.GL_TEXTURE_WRAP_S,GLES30.GL_CLAMP_TO_EDGE); GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,GLES30.GL_TEXTURE_WRAP_T,GLES30.GL_CLAMP_TO_EDGE); return a[0] }; fun drawFrame(t:Int,m:FloatArray){ program.draw(t,m,vertex) }; fun release(){program.release()} }
+private class Texture2dProgram { private val p=GlUtil.program("#version 300 es\nin vec2 aPosition; in vec2 aTexCoord; uniform mat4 uTextureMatrix; out vec2 vTexCoord; void main(){gl_Position=vec4(aPosition,0.,1.);vTexCoord=(uTextureMatrix*vec4(aTexCoord,0.,1.)).xy;}","#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision highp float; uniform samplerExternalOES uCameraTexture; in vec2 vTexCoord; out vec4 fragColor; float digLog(float x){x=max(x,0.);const float gray=.18;const float toeAtGray=.28*(1.-exp(-gray/.18));float encoded=x<=gray?.28*(1.-exp(-x/.18)):toeAtGray+.28+.38*log(1.+2.4*(x-gray));return clamp(encoded,0.,1.);} void main(){vec3 rgb=clamp(texture(uCameraTexture,vTexCoord).rgb,0.,1.);float luma=dot(rgb,vec3(.2126,.7152,.0722));vec3 softened=vec3(luma)+(rgb-vec3(luma))*.82;fragColor=vec4(digLog(softened.r),digLog(softened.g),digLog(softened.b),1.);}"); private val pos=GLES30.glGetAttribLocation(p,"aPosition"); private val tex=GLES30.glGetAttribLocation(p,"aTexCoord"); private val matrix=GLES30.glGetUniformLocation(p,"uTextureMatrix"); fun draw(t:Int,m:FloatArray,v:FloatBuffer){GLES30.glUseProgram(p);v.position(0);GLES30.glVertexAttribPointer(pos,2,GLES30.GL_FLOAT,false,16,v);GLES30.glEnableVertexAttribArray(pos);v.position(2);GLES30.glVertexAttribPointer(tex,2,GLES30.GL_FLOAT,false,16,v);GLES30.glEnableVertexAttribArray(tex);GLES30.glActiveTexture(GLES30.GL_TEXTURE0);GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,t);GLES30.glUniform1i(GLES30.glGetUniformLocation(p,"uCameraTexture"),0);GLES30.glUniformMatrix4fv(matrix,1,false,m,0);GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP,0,4)}; fun release(){GLES30.glDeleteProgram(p)} }
+private object GlUtil { fun program(v:String,f:String):Int { fun shader(t:Int,s:String)=GLES30.glCreateShader(t).also{GLES30.glShaderSource(it,s);GLES30.glCompileShader(it);val ok=IntArray(1);GLES30.glGetShaderiv(it,GLES30.GL_COMPILE_STATUS,ok,0);check(ok[0]!=0){GLES30.glGetShaderInfoLog(it)}}; val a=shader(GLES30.GL_VERTEX_SHADER,v);val b=shader(GLES30.GL_FRAGMENT_SHADER,f);return GLES30.glCreateProgram().also{GLES30.glAttachShader(it,a);GLES30.glAttachShader(it,b);GLES30.glLinkProgram(it);val ok=IntArray(1);GLES30.glGetProgramiv(it,GLES30.GL_LINK_STATUS,ok,0);check(ok[0]!=0){GLES30.glGetProgramInfoLog(it)};GLES30.glDeleteShader(a);GLES30.glDeleteShader(b)}} }

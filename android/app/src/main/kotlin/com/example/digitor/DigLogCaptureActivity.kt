@@ -398,8 +398,15 @@ class DigLogCaptureActivity : Activity() {
                     }
                 },
                 onError = { message ->
-                    outputFile?.delete()
-                    runOnUiThread { finishCanceled(message) }
+                    // V4 can fail during EGL/surface setup on older drivers. Keep the
+                    // established V3 path as a real fallback rather than abandoning
+                    // a recording before it has started.
+                    if (!recording && !tenBitFallbackStarted) {
+                        tenBitFallbackStarted = true
+                        fallbackReason = message
+                        outputFile?.delete()
+                        runOnUiThread { startEightBitV3Fallback() }
+                    } else runOnUiThread { finishCanceled(message) }
                 },
             )
             digLogV3 = engine
@@ -407,6 +414,34 @@ class DigLogCaptureActivity : Activity() {
         } catch (e: Exception) {
             finishCanceled(e.message ?: "Recording could not start")
         }
+    }
+
+    private fun startEightBitV3Fallback() {
+        val device = camera ?: return
+        try {
+            closeSession()
+            outputFile = createOutputFile()
+            record.isEnabled = false
+            status.text = "DigLog V3 fallback preparing"
+            val texture = preview.surfaceTexture ?: throw IllegalStateException("Preview surface unavailable")
+            texture.setDefaultBufferSize(previewSize.width, previewSize.height)
+            val engine = DigLogV3Engine(
+                camera = device, size = videoSize, fps = 30,
+                bitrate = if (videoSize.width >= 1920) 16_000_000 else 8_000_000,
+                output = outputFile!!, previewSurface = Surface(texture),
+                background = background ?: throw IllegalStateException("Camera thread unavailable"),
+                configureRequest = { builder -> applyDigLogControls(builder, applyToneCurve = false) },
+                onReady = { codec ->
+                    activeCodec = codec; activeAudio = false; activeBitDepth = 8
+                    activeEngineVersion = "DigLog V3"; activeBitrate = if (videoSize.width >= 1920) 16_000_000 else 8_000_000
+                    recording = true
+                    runOnUiThread { record.isEnabled = true; record.text = "STOP"; status.text = "DigLog • REC" }
+                },
+                onError = { message -> runOnUiThread { finishCanceled(message) } },
+            )
+            digLogV3 = engine
+            engine.start()
+        } catch (e: Exception) { finishCanceled(e.message ?: "V3 fallback could not start") }
     }
 
     private fun stopRecording() {
