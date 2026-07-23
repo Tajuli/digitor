@@ -55,6 +55,7 @@ class DigLogCaptureActivity : Activity() {
     private lateinit var locationButton: Button
     private lateinit var locationLabel: TextView
     private var camera: CameraDevice? = null
+    private var cameraOpening = false
     private var session: CameraCaptureSession? = null
     private var recorder: MediaRecorder? = null
     private var digLogV3: DigLogEngine? = null
@@ -74,6 +75,8 @@ class DigLogCaptureActivity : Activity() {
     private var fallbackReason: String? = null
     private var tenBitFallbackStarted = false
     private var selectedOutputTree: Uri? = null
+    private var choosingOutputFolder = false
+    private var finalizingRecording = false
     // Lifecycle callbacks may race with stop/error delivery; publish exactly one result.
     private val completionDelivered = AtomicBoolean(false)
 
@@ -161,6 +164,9 @@ class DigLogCaptureActivity : Activity() {
             Toast.makeText(this, "Stop recording before changing the save location.", Toast.LENGTH_SHORT).show()
             return
         }
+        choosingOutputFolder = true
+        record.isEnabled = false
+        status.text = "Selecting save location"
         val picker = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -174,15 +180,42 @@ class DigLogCaptureActivity : Activity() {
     @Deprecated("Deprecated in Android")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_OUTPUT_FOLDER || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        val flags = data.flags and
-            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
-        selectedOutputTree = uri
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_OUTPUT_TREE, uri.toString()).apply()
-        locationLabel.text = outputLocationText()
-        Toast.makeText(this, "DigLog save location updated.", Toast.LENGTH_SHORT).show()
+        if (requestCode != REQUEST_OUTPUT_FOLDER) return
+
+        choosingOutputFolder = false
+        if (resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri != null) {
+                val flags = data.flags and
+                    (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+                selectedOutputTree = uri
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(PREF_OUTPUT_TREE, uri.toString()).apply()
+                locationLabel.text = outputLocationText()
+                Toast.makeText(this, "DigLog save location updated.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // ACTION_OPEN_DOCUMENT_TREE pauses this Activity. The old code closed the
+        // camera in onPause but never opened it again, leaving the preview and record
+        // button frozen until the user navigated back. Always rebuild preview now.
+        restartPreviewAfterFolderPicker()
+    }
+
+    private fun restartPreviewAfterFolderPicker() {
+        record.isEnabled = false
+        record.text = "RECORD"
+        status.text = "DigLog preparing"
+        closeSession()
+        camera?.close()
+        camera = null
+        cameraOpening = false
+        preview.post {
+            if (!isFinishing && !isDestroyed && preview.isAvailable && camera == null) {
+                openCamera()
+            }
+        }
     }
 
     private fun hasPermissions() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
@@ -224,16 +257,35 @@ class DigLogCaptureActivity : Activity() {
     }
 
     private fun openCamera() {
+        if (camera != null || cameraOpening || isFinishing || isDestroyed) return
         chooseSizes()
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         if (!hasPermissions()) return
+        cameraOpening = true
         try {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(device: CameraDevice) { camera = device; createPreviewSession() }
-                override fun onDisconnected(device: CameraDevice) { device.close(); finishCanceled("Camera disconnected") }
-                override fun onError(device: CameraDevice, error: Int) { device.close(); finishCanceled("Camera error: $error") }
+                override fun onOpened(device: CameraDevice) {
+                    cameraOpening = false
+                    camera = device
+                    createPreviewSession()
+                }
+                override fun onDisconnected(device: CameraDevice) {
+                    cameraOpening = false
+                    device.close()
+                    camera = null
+                    finishCanceled("Camera disconnected")
+                }
+                override fun onError(device: CameraDevice, error: Int) {
+                    cameraOpening = false
+                    device.close()
+                    camera = null
+                    finishCanceled("Camera error: $error")
+                }
             }, background)
-        } catch (e: Exception) { finishCanceled(e.message ?: "Could not open camera") }
+        } catch (e: Exception) {
+            cameraOpening = false
+            finishCanceled(e.message ?: "Could not open camera")
+        }
     }
 
     private fun createPreviewSession() {
@@ -358,23 +410,37 @@ class DigLogCaptureActivity : Activity() {
     }
 
     private fun stopRecording() {
-        if (!recording) return
+        if (!recording || finalizingRecording) return
         recording = false
+        finalizingRecording = true
+        record.isEnabled = false
+        status.text = "Finalizing DigLog…"
+
         val engine = digLogV3
-        val success = engine?.stop() == true
-        val outputValid = engine?.outputIsValid() == true
-        digLogV3 = null
-        val file = outputFile
-        if (!success || !outputValid || file == null || !file.exists() || file.length() <= 1_024L) {
-            file?.delete(); finishCanceled("Recording failed"); return
-        }
-        val metadataFile = writeMetadata(file)
-        val savedPath = runCatching { publishToSelectedFolder(file, metadataFile) }
-            .getOrElse {
-                Toast.makeText(this, "Selected folder could not be used. Saved in app storage.", Toast.LENGTH_LONG).show()
-                file.absolutePath
+        // Never block the UI thread while the codec drains EOS. Blocking for six
+        // seconds caused skipped frames, false failure, deletion of the open output
+        // file, and the misleading final size of 0 bytes on slower phones.
+        Thread({
+            val success = engine?.stop() == true
+            val outputValid = engine?.outputIsValid() == true
+            val file = outputFile
+            runOnUiThread {
+                finalizingRecording = false
+                digLogV3 = null
+                if (!success || !outputValid || file == null || !file.exists() || file.length() <= 1_024L) {
+                    file?.delete()
+                    finishCanceled("Recording failed")
+                    return@runOnUiThread
+                }
+                val metadataFile = writeMetadata(file)
+                val savedPath = runCatching { publishToSelectedFolder(file, metadataFile) }
+                    .getOrElse {
+                        Toast.makeText(this, "Selected folder could not be used. Saved in app storage.", Toast.LENGTH_LONG).show()
+                        file.absolutePath
+                    }
+                finishSuccess(savedPath)
             }
-        finishSuccess(savedPath)
+        }, "DigLogFinalizer").start()
     }
 
     private fun applyDigLogControls(builder: CaptureRequest.Builder, applyToneCurve: Boolean = true) {
@@ -632,12 +698,30 @@ class DigLogCaptureActivity : Activity() {
     }
 
     override fun onPause() {
-        if (recording) stopRecording() else { closeSession(); camera?.close(); camera = null }
+        when {
+            choosingOutputFolder -> {
+                // Release camera for the document picker; onActivityResult reopens it.
+                closeSession(); camera?.close(); camera = null; cameraOpening = false
+            }
+            recording && !finalizingRecording -> stopRecording()
+            !finalizingRecording -> { closeSession(); camera?.close(); camera = null; cameraOpening = false }
+        }
         super.onPause()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!choosingOutputFolder && !recording && !finalizingRecording &&
+            ::preview.isInitialized && preview.isAvailable && camera == null && background != null) {
+            record.isEnabled = false
+            openCamera()
+        }
+    }
+
     override fun onDestroy() {
-        digLogV3?.stop(); digLogV3 = null
+        // stopRecording owns an in-flight finalization; do not call stop twice.
+        if (!finalizingRecording) digLogV3?.stop()
+        digLogV3 = null
         closeSession(); camera?.close(); recorder?.release(); stopBackground(); super.onDestroy()
     }
 
