@@ -28,13 +28,18 @@ internal class RecordingPipelineDiagnostics(
     }
 
     fun image(timestampNs: Long, count: Int) {
-        Log.d(TAG, "$name: Image count=$count")
-        Log.d(TAG, "$name: Image timestamp=$timestampNs ns")
+        if (count <= 3 || count % 30 == 0) {
+            Log.d(TAG, "$name: Image count=$count, timestamp=$timestampNs ns")
+        }
     }
 
-    fun imageClosed() = Log.d(TAG, "$name: acquired Image closed")
+    fun imageClosed() = Unit
 
-    fun encodedFrame(count: Int) = Log.d(TAG, "$name: Encoded frame count=$count")
+    fun encodedFrame(count: Int) {
+        if (count <= 3 || count % 30 == 0) {
+            Log.d(TAG, "$name: Encoded frame count=$count")
+        }
+    }
 
     fun finalFileSize(bytes: Long) = mark(FINAL_FILE_SIZE, "$bytes bytes")
 
