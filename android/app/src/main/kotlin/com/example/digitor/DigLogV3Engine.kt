@@ -159,11 +159,18 @@ class DigLogV3Engine(
         if (Thread.currentThread() == background.looper.thread) return stopOnWorker()
         val finished = CountDownLatch(1)
         var success = false
-        background.post {
-            success = stopOnWorker()
-            finished.countDown()
+        // Put finalization ahead of queued ImageReader/drain callbacks. On slower
+        // devices a normal post can sit behind several seconds of frame work,
+        // causing the caller to time out and delete an otherwise valid MP4.
+        background.removeCallbacks(codecDrain)
+        background.postAtFrontOfQueue {
+            try {
+                success = stopOnWorker()
+            } finally {
+                finished.countDown()
+            }
         }
-        return finished.await(6, TimeUnit.SECONDS) && success
+        return finished.await(8, TimeUnit.SECONDS) && success
     }
 
     private fun stopOnWorker(): Boolean {
