@@ -48,18 +48,31 @@ class DigLogV31Engine(
     private var muxerStarted = false
     private var muxerStopped = false
     private var encodedSamples = 0
+    private var imageCount = 0
     private var firstTimestamp = -1L
     private var lastTimestamp = -1L
     private var codecLabel = "HEVC Main10"
     private val running = AtomicBoolean(false)
     private val failed = AtomicBoolean(false)
     private val diagnostics = RecordingPipelineDiagnostics("DigLog V3.1", background, ::fail)
+    private val codecDrain = object : Runnable {
+        override fun run() {
+            if (!running.get() || failed.get()) return
+            try {
+                drain(false)
+                background.postDelayed(this, 10L)
+            } catch (t: Throwable) {
+                fail(diagnostics.stopped("continuous codec drain failed: ${t.message ?: t.javaClass.simpleName}"))
+            }
+        }
+    }
 
     override fun start() { background.post { startWorker() } }
 
     private fun startWorker() {
         try {
             diagnostics.begin()
+            diagnostics.mark(RecordingPipelineDiagnostics.CAMERA_OPENED, "CameraDevice supplied to engine")
             require(Build.VERSION.SDK_INT >= 33) { "P010 ImageReader requires Android 13+" }
             configureMain10Encoder()
             renderer = P010Renderer(inputSurface!!, size.width, size.height, diagnostics)
@@ -68,41 +81,46 @@ class DigLogV31Engine(
                     val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
                     try {
                         if (!running.get()) return@setOnImageAvailableListener
-                        diagnostics.imageTimestamp(image.timestamp)
-                        diagnostics.mark(2)
+                        imageCount++
+                        diagnostics.image(image.timestamp, imageCount)
+                        diagnostics.mark(RecordingPipelineDiagnostics.FIRST_IMAGE_CALLBACK)
                         val pts = if (firstTimestamp < 0L) {
                             firstTimestamp = image.timestamp
                             0L
                         } else (image.timestamp - firstTimestamp).coerceAtLeast(lastTimestamp + 1L)
                         lastTimestamp = pts
                         val frame = P010FrameConverter.copy(image)
-                        diagnostics.mark(3)
+                        diagnostics.mark(RecordingPipelineDiagnostics.YUV_COPY_COMPLETE)
                         renderer!!.draw(frame, pts)
-                        diagnostics.mark(7)
+                        diagnostics.mark(RecordingPipelineDiagnostics.ENCODER_INPUT_FRAME_SUBMITTED, "pts=$pts")
                         drain(false)
                     } catch (t: Throwable) {
                         fail(diagnostics.stopped("${t.message ?: t.javaClass.simpleName}"))
                     } finally {
                         image.close()
+                        diagnostics.imageClosed()
                     }
                 }, background)
             }
+            val attachedPreview = requireNotNull(previewSurface) { "Preview surface unavailable; cannot start recording" }
             val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader!!.surface)
-                previewSurface?.let(::addTarget)
+                addTarget(attachedPreview)
                 configureRequest(this)
             }
-            val outputs = mutableListOf(reader!!.surface).apply { previewSurface?.let(::add) }
+            val outputs = mutableListOf(reader!!.surface, attachedPreview)
             camera.createCaptureSession(outputs, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(value: CameraCaptureSession) {
                     if (failed.get()) { value.close(); return }
                     try {
                         session = value
                         codec!!.start()
-                        diagnostics.mark(0)
-                        diagnostics.mark(1)
-                        diagnostics.mark(8)
+                        diagnostics.mark(RecordingPipelineDiagnostics.CAPTURE_SESSION_CONFIGURED)
+                        diagnostics.mark(RecordingPipelineDiagnostics.PREVIEW_SURFACE_ATTACHED)
+                        diagnostics.mark(RecordingPipelineDiagnostics.IMAGE_READER_SURFACE_ATTACHED)
+
                         running.set(true)
+                        background.post(codecDrain)
                         value.setRepeatingRequest(request.build(), null, background)
                         onReady(codecLabel)
                 } catch (t: Throwable) { fail(diagnostics.stopped("session start failed: ${t.message ?: t.javaClass.simpleName}")) }
@@ -167,11 +185,15 @@ class DigLogV31Engine(
         if (!running.getAndSet(false)) { release(); return false }
         return try {
             runCatching { session?.stopRepeating() }; runCatching { session?.abortCaptures() }
+            check(encodedSamples > 0) {
+                diagnostics.stopped("no frame reached the encoder: no encoded sample was produced after renderer submission")
+            }
             codec?.signalEndOfInputStream()
-            diagnostics.expect(13)
+            diagnostics.mark(RecordingPipelineDiagnostics.EOS_SUBMITTED)
+            diagnostics.expect(RecordingPipelineDiagnostics.EOS_RECEIVED)
             var polls = 0
             while (polls++ < 250 && drain(true)) Unit
-            check(diagnostics.completed(13)) { diagnostics.stopped("encoder did not deliver EOS") }
+            check(diagnostics.completed(RecordingPipelineDiagnostics.EOS_RECEIVED)) { diagnostics.stopped("encoder did not deliver EOS") }
             true
         } catch (t: Throwable) {
             fail(if (t.message?.contains("recording pipeline stopped at stage:") == true) t.message!!
@@ -188,7 +210,7 @@ class DigLogV31Engine(
             when {
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> return eos
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    diagnostics.mark(9)
+                    diagnostics.mark(RecordingPipelineDiagnostics.OUTPUT_FORMAT_CHANGED)
                     check(!muxerStarted)
                     val out = encoder.outputFormat
                     val profile = if (out.containsKey(MediaFormat.KEY_PROFILE)) out.getInteger(MediaFormat.KEY_PROFILE) else -1
@@ -198,20 +220,21 @@ class DigLogV31Engine(
                         "Encoder output is not Main10 (profile=$profile)"
                     }
                     track = muxer!!.addTrack(out); muxer!!.start(); muxerStarted = true
-                    diagnostics.mark(10)
+                    diagnostics.mark(RecordingPipelineDiagnostics.MUXER_STARTED)
                 }
                 index >= 0 -> {
-                    diagnostics.mark(11, "size=${info.size}, flags=${info.flags}")
+                    diagnostics.mark(RecordingPipelineDiagnostics.FIRST_ENCODED_OUTPUT_BUFFER, "size=${info.size}, flags=${info.flags}")
                     val data = encoder.getOutputBuffer(index)
                     if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
                     if (data != null && info.size > 0 && muxerStarted) {
                         data.position(info.offset); data.limit(info.offset + info.size)
                         muxer!!.writeSampleData(track, data, info); encodedSamples++
-                        diagnostics.mark(12, "pts=${info.presentationTimeUs}, size=${info.size}")
+                        diagnostics.mark(RecordingPipelineDiagnostics.FIRST_MUXED_SAMPLE, "pts=${info.presentationTimeUs}, size=${info.size}")
+                        diagnostics.encodedFrame(encodedSamples)
                     }
                     val done = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
-                    if (done) { diagnostics.mark(13); return false }
+                    if (done) { diagnostics.mark(RecordingPipelineDiagnostics.EOS_RECEIVED); return false }
                 }
             }
         }
@@ -232,7 +255,10 @@ class DigLogV31Engine(
         runCatching { renderer?.release() }; renderer = null
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
         if (muxerStarted) muxerStopped = runCatching { muxer?.stop() }.isSuccess
-        if (muxerStopped) diagnostics.mark(14)
+        if (muxerStopped) {
+            diagnostics.mark(RecordingPipelineDiagnostics.MUXER_STOPPED)
+            diagnostics.finalFileSize(output.length())
+        }
         runCatching { muxer?.release() }; muxer = null
         runCatching { inputSurface?.release() }; inputSurface = null
     }
@@ -277,17 +303,17 @@ class DigLogV31Engine(
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D,0,GLES30.GL_R16UI,frame.width,frame.height,0,GLES30.GL_RED_INTEGER,GLES30.GL_UNSIGNED_SHORT,frame.y)
             frame.uv.position(0); GLES30.glActiveTexture(GLES30.GL_TEXTURE1); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D,textures[1])
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D,0,GLES30.GL_RG16UI,frame.width/2,frame.height/2,0,GLES30.GL_RG_INTEGER,GLES30.GL_UNSIGNED_SHORT,frame.uv)
-            diagnostics.mark(4)
+            diagnostics.mark(RecordingPipelineDiagnostics.TEXTURE_UPLOAD_COMPLETE)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(program,"uY"),0); GLES30.glUniform1i(GLES30.glGetUniformLocation(program,"uUV"),1)
             val pos=GLES30.glGetAttribLocation(program,"aPos"); val tex=GLES30.glGetAttribLocation(program,"aTex")
             vertices.position(0); GLES30.glVertexAttribPointer(pos,2,GLES30.GL_FLOAT,false,16,vertices); GLES30.glEnableVertexAttribArray(pos)
             vertices.position(2); GLES30.glVertexAttribPointer(tex,2,GLES30.GL_FLOAT,false,16,vertices); GLES30.glEnableVertexAttribArray(tex)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP,0,4)
             check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "10-bit shader draw failed" }
-            diagnostics.mark(5)
+            diagnostics.mark(RecordingPipelineDiagnostics.SHADER_RENDER_COMPLETE)
             EGLExt.eglPresentationTimeANDROID(display,window,pts)
             check(EGL14.eglSwapBuffers(display,window)) { "10-bit encoder swap failed" }
-            diagnostics.mark(6)
+            diagnostics.mark(RecordingPipelineDiagnostics.EGL_SWAP_BUFFERS_COMPLETE)
         }
         fun release() {
             runCatching { EGL14.eglMakeCurrent(display,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_CONTEXT) }
