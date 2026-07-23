@@ -139,7 +139,7 @@ class _DigLogCapturePageState extends State<DigLogCapturePage> {
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
                     onPressed: _openLastClip,
-                    icon: const Icon(Icons.movie_edit_rounded),
+                    icon: const Icon(Icons.edit_rounded),
                     label: const Text('Edit Last Clip'),
                   ),
                 ],
