@@ -6,6 +6,7 @@ import android.hardware.camera2.*
 import android.media.*
 import android.opengl.*
 import android.os.Handler
+import android.util.Log
 import android.util.Size
 import android.view.Surface
 import java.io.File
@@ -406,12 +407,22 @@ class DigLogV3Engine(
 
         private fun createProgram(vertex: String, fragment: String): Int {
             fun compile(type: Int, source: String): Int {
+                val versionOffset = source.removePrefix("\uFEFF").indexOf("#version 300 es")
+                require(versionOffset >= 0) {
+                    "GLSL shader must begin with #version 300 es"
+                }
+                val shaderSource = source.removePrefix("\uFEFF").substring(versionOffset)
                 val shader = GLES30.glCreateShader(type)
-                GLES30.glShaderSource(shader, source)
+                GLES30.glShaderSource(shader, shaderSource)
                 GLES30.glCompileShader(shader)
                 val status = IntArray(1)
                 GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, status, 0)
-                check(status[0] != 0) { GLES30.glGetShaderInfoLog(shader) }
+                if (status[0] == 0) {
+                    val compilerLog = GLES30.glGetShaderInfoLog(shader)
+                    Log.e(TAG, "Shader compilation failed. Source:\n$shaderSource\nCompiler log:\n$compilerLog")
+                    GLES30.glDeleteShader(shader)
+                    throw IllegalStateException(compilerLog)
+                }
                 return shader
             }
             val vs = compile(GLES30.GL_VERTEX_SHADER, vertex)
@@ -430,16 +441,15 @@ class DigLogV3Engine(
 
         companion object {
             private const val EGL_RECORDABLE_ANDROID = 0x3142
-            private const val VERTEX = """
-                #version 300 es
+            private const val TAG = "DigLogV3Engine"
+            private const val VERTEX = """#version 300 es
                 in vec2 aPos;
                 in vec2 aTex;
                 out vec2 vTex;
                 void main() { gl_Position = vec4(aPos, 0.0, 1.0); vTex = aTex; }
             """
 
-            private const val FRAGMENT = """
-                #version 300 es
+            private const val FRAGMENT = """#version 300 es
                 precision highp float;
                 uniform sampler2D uY;
                 uniform sampler2D uU;

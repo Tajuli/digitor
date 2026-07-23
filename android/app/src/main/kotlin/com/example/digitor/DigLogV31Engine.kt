@@ -6,6 +6,7 @@ import android.media.*
 import android.opengl.*
 import android.os.Build
 import android.os.Handler
+import android.util.Log
 import android.util.Size
 import android.view.Surface
 import com.example.digitor.diglog.frame.P010FrameConverter
@@ -320,11 +321,30 @@ class DigLogV31Engine(
             runCatching { EGL14.eglDestroySurface(display,window) }; runCatching { EGL14.eglDestroyContext(display,context) }; runCatching { EGL14.eglTerminate(display) }
         }
         private fun makeProgram(v:String,f:String):Int {
-            fun shader(type:Int,src:String):Int { val s=GLES30.glCreateShader(type); GLES30.glShaderSource(s,src); GLES30.glCompileShader(s); val ok=IntArray(1); GLES30.glGetShaderiv(s,GLES30.GL_COMPILE_STATUS,ok,0); check(ok[0]!=0){GLES30.glGetShaderInfoLog(s)}; return s }
+            fun shader(type:Int,src:String):Int {
+                val versionOffset = src.removePrefix("\uFEFF").indexOf("#version 300 es")
+                require(versionOffset >= 0) {
+                    "GLSL shader must begin with #version 300 es"
+                }
+                val shaderSource = src.removePrefix("\uFEFF").substring(versionOffset)
+                val shader = GLES30.glCreateShader(type)
+                GLES30.glShaderSource(shader, shaderSource)
+                GLES30.glCompileShader(shader)
+                val status = IntArray(1)
+                GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, status, 0)
+                if (status[0] == 0) {
+                    val compilerLog = GLES30.glGetShaderInfoLog(shader)
+                    Log.e(TAG, "Shader compilation failed. Source:\n$shaderSource\nCompiler log:\n$compilerLog")
+                    GLES30.glDeleteShader(shader)
+                    throw IllegalStateException(compilerLog)
+                }
+                return shader
+            }
             val vs=shader(GLES30.GL_VERTEX_SHADER,v); val fs=shader(GLES30.GL_FRAGMENT_SHADER,f); val p=GLES30.glCreateProgram(); GLES30.glAttachShader(p,vs); GLES30.glAttachShader(p,fs); GLES30.glLinkProgram(p); val ok=IntArray(1); GLES30.glGetProgramiv(p,GLES30.GL_LINK_STATUS,ok,0); check(ok[0]!=0){GLES30.glGetProgramInfoLog(p)}; GLES30.glDeleteShader(vs); GLES30.glDeleteShader(fs); return p
         }
         companion object {
             private const val EGL_RECORDABLE_ANDROID = 0x3142
+            private const val TAG = "DigLogV31Engine"
             const val VERTEX = """#version 300 es
 in vec2 aPos; in vec2 aTex; out vec2 vTex; void main(){gl_Position=vec4(aPos,0.0,1.0);vTex=aTex;}"""
             const val FRAGMENT = """#version 300 es
