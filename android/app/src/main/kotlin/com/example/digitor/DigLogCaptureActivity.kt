@@ -57,7 +57,7 @@ class DigLogCaptureActivity : Activity() {
     private var session: CameraCaptureSession? = null
     private var recorder: MediaRecorder? = null
     private var digLog10: DigLog10Engine? = null
-    private var digLog8Gpu: DigLog8GpuEngine? = null
+    private var digLogV3: DigLogV3Engine? = null
     private var usingTenBit = false
     private var backgroundThread: HandlerThread? = null
     private var background: Handler? = null
@@ -306,16 +306,16 @@ class DigLogCaptureActivity : Activity() {
             outputFile = createOutputFile()
             usingTenBit = false
             record.isEnabled = false
-            status.text = "DigLog GPU preparing"
+            status.text = "DigLog V3 preparing"
 
             val texture = preview.surfaceTexture ?: throw IllegalStateException("Preview surface unavailable")
             texture.setDefaultBufferSize(previewSize.width, previewSize.height)
             val previewSurface = Surface(texture)
-            val engine = DigLog8GpuEngine(
+            val engine = DigLogV3Engine(
                 camera = device,
                 size = videoSize,
                 fps = 30,
-                bitrate = if (videoSize.width >= 1920) 20_000_000 else 10_000_000,
+                bitrate = if (videoSize.width >= 1920) 16_000_000 else 8_000_000,
                 output = outputFile!!,
                 previewSurface = previewSurface,
                 background = background ?: throw IllegalStateException("Camera thread unavailable"),
@@ -323,12 +323,12 @@ class DigLogCaptureActivity : Activity() {
                 onReady = { codec ->
                     activeCodec = codec
                     activeAudio = false
-                    activeBitrate = if (videoSize.width >= 1920) 20_000_000 else 10_000_000
+                    activeBitrate = if (videoSize.width >= 1920) 16_000_000 else 8_000_000
                     recording = true
                     runOnUiThread {
                         record.isEnabled = true
                         record.text = "STOP"
-                        status.text = "DigLog GPU • REC"
+                        status.text = "DigLog V3 8-bit • REC"
                     }
                 },
                 onError = { message ->
@@ -336,7 +336,7 @@ class DigLogCaptureActivity : Activity() {
                     runOnUiThread { finishCanceled(message) }
                 },
             )
-            digLog8Gpu = engine
+            digLogV3 = engine
             engine.start()
         } catch (e: Exception) {
             finishCanceled(e.message ?: "Recording could not start")
@@ -351,8 +351,8 @@ class DigLogCaptureActivity : Activity() {
             digLog10 = null
             ok
         } else {
-            val ok = digLog8Gpu?.stop() == true
-            digLog8Gpu = null
+            val ok = digLogV3?.stop() == true
+            digLogV3 = null
             ok
         }
         val file = outputFile
@@ -552,8 +552,8 @@ class DigLogCaptureActivity : Activity() {
         val json = JSONObject().apply {
             put("profile", "DigLog")
             put("engineBitDepth", internalBitDepth)
-            put("gamma", if (usingTenBit) "DigLog10 Gamma v1" else "DigLog GPU Gamma v2")
-            put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 SurfaceTexture → OpenGL ES DigLog shader → encoder surface")
+            put("gamma", if (usingTenBit) "DigLog10 Gamma v1" else "DigLog V3 GPU Gamma")
+            put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 preview surface + YUV_420_888 ImageReader → OpenGL ES DigLog transform → encoder-only EGL surface")
             put("codec", if (usingTenBit) "HEVC Main10" else activeCodec)
             put("audio", if (usingTenBit) false else activeAudio)
             put("bitrate", if (usingTenBit) calculateTenBitBitrate() else calculateBitrate())
@@ -620,7 +620,7 @@ class DigLogCaptureActivity : Activity() {
 
     override fun onDestroy() {
         digLog10?.stop(); digLog10 = null
-        digLog8Gpu?.stop(); digLog8Gpu = null
+        digLogV3?.stop(); digLogV3 = null
         closeSession(); camera?.close(); recorder?.release(); stopBackground(); super.onDestroy()
     }
 
