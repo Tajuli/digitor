@@ -6,6 +6,7 @@ import android.hardware.camera2.*
 import android.media.*
 import android.opengl.*
 import android.os.Handler
+import android.os.SystemClock
 import android.util.Log
 import android.util.Size
 import android.view.Surface
@@ -36,6 +37,7 @@ class DigLogV3Engine(
     private val onReady: (String) -> Unit,
     private val onError: (String) -> Unit,
 ) : DigLogEngine {
+    private companion object { const val EOS_DRAIN_TIMEOUT_MS = 5_000L }
     override val actualBitDepth: Int = 8
     override val codecName: String get() = codecLabel
     private var imageReader: ImageReader? = null
@@ -48,6 +50,7 @@ class DigLogV3Engine(
     private var muxerStarted = false
     private val running = AtomicBoolean(false)
     private val failed = AtomicBoolean(false)
+    private val resourcesReleased = AtomicBoolean(false)
     private var firstTimestampNs = -1L
     private var lastPresentationNs = -1L
     private var codecLabel = "H.264"
@@ -144,7 +147,7 @@ class DigLogV3Engine(
     }
 
     override fun outputIsValid(): Boolean = muxerStarted && muxerStopped && encodedSamples > 0 &&
-        lastPresentationNs > 0L && output.isFile && output.length() > 1_024L
+        output.isFile && output.length() > 1_024L
 
     override fun stop(): Boolean {
         // Stop is frequently called from an Activity callback. Keep codec draining,
@@ -164,15 +167,25 @@ class DigLogV3Engine(
         return try {
             runCatching { session?.stopRepeating() }
             runCatching { session?.abortCaptures() }
-            check(encodedSamples > 0) {
-                diagnostics.stopped("no frame reached the encoder: no encoded sample was produced after renderer submission")
-            }
             codec?.signalEndOfInputStream()
             diagnostics.mark(RecordingPipelineDiagnostics.EOS_SUBMITTED)
             diagnostics.expect(RecordingPipelineDiagnostics.EOS_RECEIVED)
-            var loops = 0
-            while (loops++ < 150 && drainEncoder(true)) Unit
-            check(diagnostics.completed(RecordingPipelineDiagnostics.EOS_RECEIVED)) { diagnostics.stopped("encoder did not deliver EOS") }
+
+            val deadlineMs = SystemClock.elapsedRealtime() + EOS_DRAIN_TIMEOUT_MS
+            var eosReceived = false
+            while (!eosReceived && SystemClock.elapsedRealtime() < deadlineMs) {
+                eosReceived = drainEncoder(true)
+            }
+            check(eosReceived) { diagnostics.stopped("timed out waiting for encoder EOS") }
+            check(encodedSamples > 0) {
+                diagnostics.stopped("no encoded frames were written")
+            }
+
+            // EOS has been observed, so the muxer can now finalize the MP4 safely.
+            release()
+            check(outputIsValid()) {
+                diagnostics.stopped("final output verification failed")
+            }
             true
         } catch (t: Throwable) {
             failOnce(if (t.message?.contains("recording pipeline stopped at stage:") == true) t.message!!
@@ -219,14 +232,14 @@ class DigLogV3Engine(
         throw IllegalStateException("No compatible surface encoder: ${last?.message}")
     }
 
-    /** Returns true while an EOS drain may need another poll. */
+    /** Returns true only after the encoder delivers BUFFER_FLAG_END_OF_STREAM. */
     private fun drainEncoder(end: Boolean): Boolean {
         val encoder = codec ?: return false
         val info = MediaCodec.BufferInfo()
         while (true) {
             val index = encoder.dequeueOutputBuffer(info, if (end) 10_000 else 0)
             when {
-                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return end
+                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return false
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     diagnostics.mark(RecordingPipelineDiagnostics.OUTPUT_FORMAT_CHANGED)
                     check(!muxerStarted) { "Encoder format changed twice" }
@@ -249,7 +262,7 @@ class DigLogV3Engine(
                     }
                     val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
-                    if (eos) { diagnostics.mark(RecordingPipelineDiagnostics.EOS_RECEIVED); return false }
+                    if (eos) { diagnostics.mark(RecordingPipelineDiagnostics.EOS_RECEIVED); return true }
                 }
             }
         }
@@ -263,22 +276,37 @@ class DigLogV3Engine(
     }
 
     private fun release() {
+        if (!resourcesReleased.compareAndSet(false, true)) return
         running.set(false)
-        runCatching { session?.close() }; session = null
-        runCatching { imageReader?.close() }; imageReader = null
-        runCatching { renderer?.release() }; renderer = null
-        runCatching { codec?.stop() }
-        runCatching { codec?.release() }; codec = null
-        if (muxerStarted) {
-            muxerStopped = runCatching { muxer?.stop() }.isSuccess
-            if (muxerStopped) {
-                diagnostics.mark(RecordingPipelineDiagnostics.MUXER_STOPPED)
-                diagnostics.finalFileSize(output.length())
+
+        session?.let { activeSession -> runCatching { activeSession.close() } }
+        session = null
+
+        // MediaMuxer must be stopped only after EOS has been drained on the normal path.
+        muxer?.let { activeMuxer ->
+            if (diagnostics.completed(RecordingPipelineDiagnostics.EOS_RECEIVED) && muxerStarted) {
+                muxerStopped = runCatching { activeMuxer.stop() }.isSuccess
+                if (muxerStopped) {
+                    diagnostics.mark(RecordingPipelineDiagnostics.MUXER_STOPPED)
+                    diagnostics.finalFileSize(output.length())
+                }
             }
+            runCatching { activeMuxer.release() }
         }
-        // Keep muxerStarted as a finalization fact for output validation.
-        runCatching { muxer?.release() }; muxer = null
-        runCatching { encoderSurface?.release() }; encoderSurface = null
+        muxer = null
+
+        codec?.let { activeCodec ->
+            runCatching { activeCodec.stop() }
+            runCatching { activeCodec.release() }
+        }
+        codec = null
+        renderer?.let { activeRenderer -> runCatching { activeRenderer.release() } }
+        renderer = null
+        imageReader?.let { activeReader -> runCatching { activeReader.close() } }
+        imageReader = null
+        encoderSurface?.let { activeSurface -> runCatching { activeSurface.release() } }
+        encoderSurface = null
+        previewSurface?.let { activeSurface -> runCatching { activeSurface.release() } }
     }
 
     private data class YuvFrame(
