@@ -19,6 +19,8 @@ import android.util.Size
 import android.view.Gravity
 import android.view.Surface
 import android.view.TextureView
+import android.view.View
+import android.view.WindowInsets
 import android.widget.*
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -114,17 +116,32 @@ class DigLogCaptureActivity : Activity() {
             text = "SELECT SAVE LOCATION"
             setOnClickListener { chooseOutputFolder() }
         }
-        bottomPanel.addView(locationButton, LinearLayout.LayoutParams(-1, 100).apply { bottomMargin = 12 })
+        bottomPanel.addView(locationButton, LinearLayout.LayoutParams(-1, 88).apply { bottomMargin = 10 })
 
         record = Button(this).apply {
             text = "RECORD"
             isEnabled = false
             setOnClickListener { if (recording) stopRecording() else startRecording() }
         }
-        bottomPanel.addView(record, LinearLayout.LayoutParams(240, 120))
+        bottomPanel.addView(record, LinearLayout.LayoutParams(240, 96))
 
-        root.addView(bottomPanel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        val bottomParams = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
+        root.addView(bottomPanel, bottomParams)
+
+        // Keep all controls above gesture/navigation bars on edge-to-edge devices.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val navBottom = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            } else {
+                @Suppress("DEPRECATION")
+                insets.systemWindowInsetBottom
+            }
+            bottomPanel.setPadding(24, 16, 24, 24 + navBottom)
+            insets
+        }
+        root.systemUiVisibility = root.systemUiVisibility or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         setContentView(root)
+        root.requestApplyInsets()
     }
 
 
@@ -227,7 +244,7 @@ class DigLogCaptureActivity : Activity() {
             override fun onConfigured(s: CameraCaptureSession) {
                 session = s
                 s.setRepeatingRequest(builder.build(), null, background)
-                runOnUiThread { record.isEnabled = true; status.text = "DigLog Ready" }
+                runOnUiThread { record.isEnabled = true; status.text = if (internalBitDepth >= 10) "DigLog10 Ready" else "DigLog8 Flat Ready" }
             }
             override fun onConfigureFailed(s: CameraCaptureSession) { finishCanceled("Preview configuration failed") }
         }, background)
@@ -347,9 +364,16 @@ class DigLogCaptureActivity : Activity() {
 
         setIfSupported(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         setIfSupported(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-        setIfSupported(CaptureRequest.CONTROL_AE_LOCK, true)
+        // Do not lock AE/AWB before they converge; that caused very dark clips on low-end phones.
+        setIfSupported(CaptureRequest.CONTROL_AE_LOCK, false)
         setIfSupported(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
-        setIfSupported(CaptureRequest.CONTROL_AWB_LOCK, true)
+        setIfSupported(CaptureRequest.CONTROL_AWB_LOCK, false)
+        setIfSupported(CaptureRequest.CONTROL_EFFECT_MODE, CameraMetadata.CONTROL_EFFECT_MODE_OFF)
+
+        val compensationRange = characteristics?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+        if (compensationRange != null && compensationRange.contains(1)) {
+            setIfSupported(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 1)
+        }
         setIfSupported(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
 
         val noiseModes = characteristics?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.toSet().orEmpty()
@@ -389,20 +413,31 @@ class DigLogCaptureActivity : Activity() {
         if (fps != null) setIfSupported(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
     }
 
-    /** Mobile-optimized logarithmic curve with a protected toe and soft highlight shoulder. */
+    /**
+     * DigLog8 capture curve for devices without a true 10-bit pipeline.
+     * The curve deliberately lifts the toe and compresses upper mids/highlights,
+     * producing a visibly flatter file that leaves room for grading.
+     */
     private fun buildDigLogCurve(): TonemapCurve {
-        val points = 64
-        val curve = FloatArray(points * 2)
-        val a = 18.0
-        val norm = ln(1.0 + a)
-        for (i in 0 until points) {
-            val x = i.toDouble() / (points - 1)
-            var y = ln(1.0 + a * x) / norm
-            // Keep black noise from being lifted excessively; reserve code values for highlights.
-            y = 0.035 + y * 0.91
-            y = min(0.965, max(0.0, y))
-            curve[i * 2] = x.toFloat()
-            curve[i * 2 + 1] = y.toFloat()
+        val anchors = arrayOf(
+            0.000f to 0.000f,
+            0.010f to 0.045f,
+            0.025f to 0.085f,
+            0.050f to 0.135f,
+            0.100f to 0.215f,
+            0.180f to 0.305f,
+            0.300f to 0.420f,
+            0.450f to 0.535f,
+            0.600f to 0.635f,
+            0.750f to 0.735f,
+            0.880f to 0.830f,
+            0.960f to 0.915f,
+            1.000f to 1.000f,
+        )
+        val curve = FloatArray(anchors.size * 2)
+        anchors.forEachIndexed { index, point ->
+            curve[index * 2] = point.first
+            curve[index * 2 + 1] = point.second
         }
         return TonemapCurve(curve, curve, curve)
     }
@@ -501,7 +536,7 @@ class DigLogCaptureActivity : Activity() {
         val json = JSONObject().apply {
             put("profile", "DigLog")
             put("engineBitDepth", internalBitDepth)
-            put("gamma", "DigLog Gamma v1")
+            put("gamma", "DigLog8 Flat Gamma v2")
             put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 programmable pre-encode tone curve")
             put("codec", if (usingTenBit) "HEVC Main10" else activeCodec)
             put("audio", if (usingTenBit) false else activeAudio)
