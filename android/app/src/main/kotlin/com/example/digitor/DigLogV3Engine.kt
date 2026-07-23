@@ -52,6 +52,7 @@ class DigLogV3Engine(
     private var codecLabel = "H.264"
     private var encodedSamples = 0
     private var muxerStopped = false
+    private val diagnostics = RecordingPipelineDiagnostics("DigLog V3", background, ::failOnce)
 
     override fun start() {
         // All codec/EGL/ImageReader work is owned by the camera worker looper.
@@ -60,24 +61,30 @@ class DigLogV3Engine(
 
     private fun startOnWorker() {
         try {
+            diagnostics.begin()
             configureEncoderWithFallback()
             val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
             imageReader = reader
-            renderer = YuvEglRenderer(encoderSurface!!, size.width, size.height)
+            renderer = YuvEglRenderer(encoderSurface!!, size.width, size.height, diagnostics)
 
             reader.setOnImageAvailableListener({ source ->
                 val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
                 try {
                     if (!running.get()) return@setOnImageAvailableListener
+                    diagnostics.imageTimestamp(image.timestamp)
+                    diagnostics.mark(2)
                     val pts = if (firstTimestampNs < 0L) {
                         firstTimestampNs = image.timestamp
                         0L
                     } else (image.timestamp - firstTimestampNs).coerceAtLeast(lastPresentationNs + 1L)
                     lastPresentationNs = pts
-                    renderer?.draw(YuvFrame.from(image), pts)
+                    val frame = YuvFrame.from(image)
+                    diagnostics.mark(3)
+                    renderer?.draw(frame, pts)
+                    diagnostics.mark(7)
                     drainEncoder(false)
                 } catch (t: Throwable) {
-                    failOnce("DigLog V3 frame processing failed: ${t.message ?: t.javaClass.simpleName}")
+                    failOnce(diagnostics.stopped("${t.message ?: t.javaClass.simpleName}"))
                 } finally {
                     image.close()
                 }
@@ -95,22 +102,25 @@ class DigLogV3Engine(
                     try {
                         session = value
                         codec?.start()
+                        diagnostics.mark(0)
+                        diagnostics.mark(1)
+                        diagnostics.mark(8)
                         running.set(true)
                         value.setRepeatingRequest(request.build(), null, background)
                         onReady(codecLabel)
                     } catch (t: Throwable) {
-                        failOnce("DigLog V3 session start failed: ${t.message}")
+                        failOnce(diagnostics.stopped("session start failed: ${t.message ?: t.javaClass.simpleName}"))
                     }
                 }
 
                 override fun onConfigureFailed(value: CameraCaptureSession) {
                     value.close()
-                    failOnce("DigLog V3 camera session could not be configured")
+                    failOnce(diagnostics.stopped("camera session could not be configured"))
                 }
             }, background)
         } catch (t: Throwable) {
             release()
-            failOnce("DigLog V3 could not start: ${t.message ?: t.javaClass.simpleName}")
+            failOnce(diagnostics.stopped("could not start: ${t.message ?: t.javaClass.simpleName}"))
         }
     }
 
@@ -136,10 +146,14 @@ class DigLogV3Engine(
             runCatching { session?.stopRepeating() }
             runCatching { session?.abortCaptures() }
             codec?.signalEndOfInputStream()
+            diagnostics.expect(13)
             var loops = 0
             while (loops++ < 150 && drainEncoder(true)) Unit
+            check(diagnostics.completed(13)) { diagnostics.stopped("encoder did not deliver EOS") }
             true
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            failOnce(if (t.message?.contains("recording pipeline stopped at stage:") == true) t.message!!
+                else diagnostics.stopped(t.message ?: t.javaClass.simpleName))
             false
         } finally {
             release()
@@ -191,12 +205,15 @@ class DigLogV3Engine(
             when {
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> return end
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    diagnostics.mark(9)
                     check(!muxerStarted) { "Encoder format changed twice" }
                     trackIndex = muxer!!.addTrack(encoder.outputFormat)
                     muxer!!.start()
                     muxerStarted = true
+                    diagnostics.mark(10)
                 }
                 index >= 0 -> {
+                    diagnostics.mark(11, "size=${info.size}, flags=${info.flags}")
                     val data = encoder.getOutputBuffer(index)
                     if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
                     if (data != null && info.size > 0 && muxerStarted) {
@@ -204,10 +221,11 @@ class DigLogV3Engine(
                         data.limit(info.offset + info.size)
                         muxer!!.writeSampleData(trackIndex, data, info)
                         encodedSamples++
+                        diagnostics.mark(12, "pts=${info.presentationTimeUs}, size=${info.size}")
                     }
                     val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
-                    if (eos) return false
+                    if (eos) { diagnostics.mark(13); return false }
                 }
             }
         }
@@ -229,6 +247,7 @@ class DigLogV3Engine(
         runCatching { codec?.release() }; codec = null
         if (muxerStarted) {
             muxerStopped = runCatching { muxer?.stop() }.isSuccess
+            if (muxerStopped) diagnostics.mark(14)
         }
         // Keep muxerStarted as a finalization fact for output validation.
         runCatching { muxer?.release() }; muxer = null
@@ -257,7 +276,7 @@ class DigLogV3Engine(
         }
     }
 
-    private class YuvEglRenderer(surface: Surface, private val width: Int, private val height: Int) {
+    private class YuvEglRenderer(surface: Surface, private val width: Int, private val height: Int, private val diagnostics: RecordingPipelineDiagnostics) {
         private val display: EGLDisplay
         private val context: EGLContext
         private val eglSurface: EGLSurface
@@ -287,6 +306,7 @@ class DigLogV3Engine(
                 EGL14.EGL_ALPHA_SIZE, 8,
                 EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES3_BIT_KHR,
                 EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                EGL_RECORDABLE_ANDROID, 1,
                 EGL14.EGL_NONE,
             )
             check(EGL14.eglChooseConfig(display, attrs, 0, configs, 0, 1, count, 0) && count[0] > 0) { "No EGL8888 config" }
@@ -315,6 +335,7 @@ class DigLogV3Engine(
             upload(0, frame.width, frame.height, frame.y)
             upload(1, frame.width / 2, frame.height / 2, frame.u)
             upload(2, frame.width / 2, frame.height / 2, frame.v)
+            diagnostics.mark(4)
 
             val pos = GLES30.glGetAttribLocation(program, "aPos")
             val tex = GLES30.glGetAttribLocation(program, "aTex")
@@ -330,8 +351,15 @@ class DigLogV3Engine(
                 GLES30.glUniform1i(GLES30.glGetUniformLocation(program, arrayOf("uY", "uU", "uV")[i]), i)
             }
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            checkGl("Shader draw")
+            diagnostics.mark(5)
             EGLExt.eglPresentationTimeANDROID(display, eglSurface, timestampNs)
             check(EGL14.eglSwapBuffers(display, eglSurface)) { "Encoder swap failed: 0x${Integer.toHexString(EGL14.eglGetError())}" }
+            diagnostics.mark(6)
+        }
+
+        private fun checkGl(operation: String) {
+            check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "$operation failed" }
         }
 
         private fun upload(index: Int, w: Int, h: Int, data: ByteBuffer) {
@@ -375,6 +403,7 @@ class DigLogV3Engine(
         }
 
         companion object {
+            private const val EGL_RECORDABLE_ANDROID = 0x3142
             private const val VERTEX = """
                 #version 300 es
                 in vec2 aPos;
