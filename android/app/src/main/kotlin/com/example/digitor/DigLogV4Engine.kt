@@ -187,4 +187,46 @@ private class EglCore {
 private class WindowSurface(private val egl: EglCore, window: Surface) { val surface=egl.window(window); fun makeCurrent() { check(EGL14.eglMakeCurrent(egl.display,surface,surface,egl.context)) }; fun swapBuffers() { check(EGL14.eglSwapBuffers(egl.display,surface)) }; fun width()=query(EGL14.EGL_WIDTH); fun height()=query(EGL14.EGL_HEIGHT); private fun query(a:Int):Int { val v=IntArray(1); EGL14.eglQuerySurface(egl.display,surface,a,v,0); return v[0] }; fun release(){ EGL14.eglDestroySurface(egl.display,surface) } }
 private class FullFrameRect(private val program: Texture2dProgram) { private val vertex: FloatBuffer=ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asFloatBuffer().apply{put(floatArrayOf(-1f,-1f,0f,0f,1f,-1f,1f,0f,-1f,1f,0f,1f,1f,1f,1f,1f));position(0)}; fun createTextureObject():Int { val a=IntArray(1); GLES30.glGenTextures(1,a,0); GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,a[0]); for (p in intArrayOf(GLES30.GL_TEXTURE_MIN_FILTER,GLES30.GL_TEXTURE_MAG_FILTER)) GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,p,GLES30.GL_LINEAR); GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,GLES30.GL_TEXTURE_WRAP_S,GLES30.GL_CLAMP_TO_EDGE); GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,GLES30.GL_TEXTURE_WRAP_T,GLES30.GL_CLAMP_TO_EDGE); return a[0] }; fun drawFrame(t:Int,m:FloatArray){ program.draw(t,m,vertex) }; fun release(){program.release()} }
 private class Texture2dProgram { private val p=GlUtil.program("#version 300 es\nin vec2 aPosition; in vec2 aTexCoord; uniform mat4 uTextureMatrix; out vec2 vTexCoord; void main(){gl_Position=vec4(aPosition,0.,1.);vTexCoord=(uTextureMatrix*vec4(aTexCoord,0.,1.)).xy;}","#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision highp float; uniform samplerExternalOES uCameraTexture; in vec2 vTexCoord; out vec4 fragColor; float digLog(float x){x=max(x,0.);const float gray=.18;const float toeAtGray=.28*(1.-exp(-gray/.18));float encoded=x<=gray?.28*(1.-exp(-x/.18)):toeAtGray+.28+.38*log(1.+2.4*(x-gray));return clamp(encoded,0.,1.);} void main(){vec3 rgb=clamp(texture(uCameraTexture,vTexCoord).rgb,0.,1.);float luma=dot(rgb,vec3(.2126,.7152,.0722));vec3 softened=vec3(luma)+(rgb-vec3(luma))*.82;fragColor=vec4(digLog(softened.r),digLog(softened.g),digLog(softened.b),1.);}"); private val pos=GLES30.glGetAttribLocation(p,"aPosition"); private val tex=GLES30.glGetAttribLocation(p,"aTexCoord"); private val matrix=GLES30.glGetUniformLocation(p,"uTextureMatrix"); fun draw(t:Int,m:FloatArray,v:FloatBuffer){GLES30.glUseProgram(p);v.position(0);GLES30.glVertexAttribPointer(pos,2,GLES30.GL_FLOAT,false,16,v);GLES30.glEnableVertexAttribArray(pos);v.position(2);GLES30.glVertexAttribPointer(tex,2,GLES30.GL_FLOAT,false,16,v);GLES30.glEnableVertexAttribArray(tex);GLES30.glActiveTexture(GLES30.GL_TEXTURE0);GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,t);GLES30.glUniform1i(GLES30.glGetUniformLocation(p,"uCameraTexture"),0);GLES30.glUniformMatrix4fv(matrix,1,false,m,0);GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP,0,4)}; fun release(){GLES30.glDeleteProgram(p)} }
-private object GlUtil { fun program(v:String,f:String):Int { fun shader(t:Int,s:String)=GLES30.glCreateShader(t).also{GLES30.glShaderSource(it,s);GLES30.glCompileShader(it);val ok=IntArray(1);GLES30.glGetShaderiv(it,GLES30.GL_COMPILE_STATUS,ok,0);check(ok[0]!=0){GLES30.glGetShaderInfoLog(it)}}; val a=shader(GLES30.GL_VERTEX_SHADER,v);val b=shader(GLES30.GL_FRAGMENT_SHADER,f);return GLES30.glCreateProgram().also{GLES30.glAttachShader(it,a);GLES30.glAttachShader(it,b);GLES30.glLinkProgram(it);val ok=IntArray(1);GLES30.glGetProgramiv(it,GLES30.GL_LINK_STATUS,ok,0);check(ok[0]!=0){GLES30.glGetProgramInfoLog(it)};GLES30.glDeleteShader(a);GLES30.glDeleteShader(b)}} }
+private object GlUtil {
+    fun program(vertexSource: String, fragmentSource: String): Int {
+        fun compileShader(type: Int, source: String): Int {
+            val shader = GLES30.glCreateShader(type)
+            check(shader != 0) { "glCreateShader failed for type=$type" }
+
+            GLES30.glShaderSource(shader, source)
+            GLES30.glCompileShader(shader)
+
+            val status = IntArray(1)
+            GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, status, 0)
+            if (status[0] == 0) {
+                val log = GLES30.glGetShaderInfoLog(shader)
+                GLES30.glDeleteShader(shader)
+                error("Shader compilation failed: $log")
+            }
+            return shader
+        }
+
+        val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, vertexSource)
+        val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource)
+        val program = GLES30.glCreateProgram()
+        check(program != 0) { "glCreateProgram failed" }
+
+        GLES30.glAttachShader(program, vertexShader)
+        GLES30.glAttachShader(program, fragmentShader)
+        GLES30.glLinkProgram(program)
+
+        val status = IntArray(1)
+        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES30.glGetProgramInfoLog(program)
+            GLES30.glDeleteProgram(program)
+            GLES30.glDeleteShader(vertexShader)
+            GLES30.glDeleteShader(fragmentShader)
+            error("Program link failed: $log")
+        }
+
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
+        return program
+    }
+}
