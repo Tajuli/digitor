@@ -56,6 +56,9 @@ class DigLogCaptureActivity : Activity() {
     private var internalBitDepth = 8
     private var videoSize = Size(1920, 1080)
     private var previewSize = Size(1920, 1080)
+    private var activeCodec = "H.264"
+    private var activeBitrate = 12_000_000
+    private var activeAudio = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,10 +116,16 @@ class DigLogCaptureActivity : Activity() {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         val c = manager.getCameraCharacteristics(cameraId)
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
+        val maxWidth = if (internalBitDepth >= 10) 3840 else 1920
+        val maxHeight = if (internalBitDepth >= 10) 2160 else 1080
         val candidates = map.getOutputSizes(MediaRecorder::class.java).orEmpty()
-            .filter { it.width * 9 == it.height * 16 && it.width <= 3840 && it.height <= 2160 }
+            .filter { it.width * 9 == it.height * 16 && it.width <= maxWidth && it.height <= maxHeight }
             .sortedByDescending { it.width * it.height }
-        videoSize = candidates.firstOrNull() ?: Size(1920, 1080)
+        videoSize = candidates.firstOrNull()
+            ?: map.getOutputSizes(MediaRecorder::class.java).orEmpty()
+                .filter { it.width <= maxWidth && it.height <= maxHeight }
+                .maxByOrNull { it.width * it.height }
+            ?: Size(1280, 720)
         previewSize = map.getOutputSizes(android.graphics.SurfaceTexture::class.java).orEmpty()
             .filter { it.width * videoSize.height == it.height * videoSize.width }
             .minByOrNull { kotlin.math.abs(it.width - videoSize.width) } ?: videoSize
@@ -323,26 +332,72 @@ class DigLogCaptureActivity : Activity() {
         return TonemapCurve(curve, curve, curve)
     }
 
+    private data class RecorderAttempt(
+        val encoder: Int,
+        val codecName: String,
+        val size: Size,
+        val bitrate: Int,
+        val withAudio: Boolean,
+    )
+
     private fun createRecorder(file: File): MediaRecorder {
-        @Suppress("DEPRECATION")
-        val r = if (android.os.Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
-        r.setAudioSource(MediaRecorder.AudioSource.MIC)
-        r.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-        r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-        r.setOutputFile(file.absolutePath)
-        r.setVideoEncodingBitRate(calculateBitrate())
-        r.setVideoFrameRate(30)
-        r.setVideoSize(videoSize.width, videoSize.height)
-        r.setVideoEncoder(
-            if (hasEncoder("video/hevc")) MediaRecorder.VideoEncoder.HEVC
-            else MediaRecorder.VideoEncoder.H264
+        val sizes = linkedSetOf(videoSize, Size(1920, 1080), Size(1280, 720))
+            .filter { it.width <= videoSize.width && it.height <= videoSize.height }
+            .ifEmpty { listOf(Size(1280, 720)) }
+        val attempts = mutableListOf<RecorderAttempt>()
+        for (size in sizes) {
+            val bitrate = when {
+                size.width >= 1920 -> 20_000_000
+                else -> 10_000_000
+            }
+            // HEVC is attempted first only when advertised, but many low-end OEMs
+            // expose an unusable encoder. H.264 is the compatibility baseline.
+            if (hasEncoder("video/hevc")) {
+                attempts += RecorderAttempt(MediaRecorder.VideoEncoder.HEVC, "HEVC", size, bitrate, true)
+            }
+            attempts += RecorderAttempt(MediaRecorder.VideoEncoder.H264, "H.264", size, bitrate, true)
+            attempts += RecorderAttempt(MediaRecorder.VideoEncoder.H264, "H.264", size, bitrate, false)
+        }
+
+        var lastError: Throwable? = null
+        for (attempt in attempts) {
+            val candidate = newMediaRecorder()
+            try {
+                if (attempt.withAudio) candidate.setAudioSource(MediaRecorder.AudioSource.MIC)
+                candidate.setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                candidate.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                candidate.setOutputFile(file.absolutePath)
+                candidate.setVideoEncodingBitRate(attempt.bitrate)
+                candidate.setVideoFrameRate(30)
+                candidate.setVideoSize(attempt.size.width, attempt.size.height)
+                candidate.setVideoEncoder(attempt.encoder)
+                if (attempt.withAudio) {
+                    candidate.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    candidate.setAudioEncodingBitRate(128_000)
+                    candidate.setAudioSamplingRate(44_100)
+                }
+                candidate.prepare()
+                videoSize = attempt.size
+                activeCodec = attempt.codecName
+                activeBitrate = attempt.bitrate
+                activeAudio = attempt.withAudio
+                return candidate
+            } catch (t: Throwable) {
+                lastError = t
+                runCatching { candidate.reset() }
+                runCatching { candidate.release() }
+                file.delete()
+            }
+        }
+        throw IllegalStateException(
+            "No compatible recorder configuration (HEVC/H.264, 1080p/720p) could be prepared",
+            lastError,
         )
-        r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        r.setAudioEncodingBitRate(192_000)
-        r.setAudioSamplingRate(48_000)
-        r.prepare()
-        return r
     }
+
+    @Suppress("DEPRECATION")
+    private fun newMediaRecorder(): MediaRecorder =
+        if (android.os.Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
 
 
     private fun hasEncoder(mime: String): Boolean =
@@ -359,14 +414,7 @@ class DigLogCaptureActivity : Activity() {
         }
     }
 
-    private fun calculateBitrate(): Int {
-        val pixels = videoSize.width.toLong() * videoSize.height
-        return when {
-            pixels >= 3840L * 2160L -> 120_000_000
-            pixels >= 2560L * 1440L -> 70_000_000
-            else -> if (videoSize.width >= 1920) 24_000_000 else 12_000_000
-        }
-    }
+    private fun calculateBitrate(): Int = activeBitrate
 
     private fun createOutputFile(): File {
         val dir = File(getExternalFilesDir(null) ?: filesDir, "DigLog").apply { mkdirs() }
@@ -380,7 +428,8 @@ class DigLogCaptureActivity : Activity() {
             put("engineBitDepth", internalBitDepth)
             put("gamma", "DigLog Gamma v1")
             put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 programmable pre-encode tone curve")
-            put("codec", if (usingTenBit) "HEVC Main10" else "HEVC Main")
+            put("codec", if (usingTenBit) "HEVC Main10" else activeCodec)
+            put("audio", if (usingTenBit) false else activeAudio)
             put("bitrate", if (usingTenBit) calculateTenBitBitrate() else calculateBitrate())
             put("width", videoSize.width)
             put("height", videoSize.height)
