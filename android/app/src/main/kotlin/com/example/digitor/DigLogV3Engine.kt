@@ -1,6 +1,7 @@
 package com.example.digitor
 
 import android.graphics.ImageFormat
+import com.example.digitor.diglog.frame.Yuv420FrameConverter
 import android.hardware.camera2.*
 import android.media.*
 import android.opengl.*
@@ -11,6 +12,8 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -43,9 +46,17 @@ class DigLogV3Engine(
     private val running = AtomicBoolean(false)
     private val failed = AtomicBoolean(false)
     private var firstTimestampNs = -1L
+    private var lastPresentationNs = -1L
     private var codecLabel = "H.264"
+    private var encodedSamples = 0
+    private var muxerStopped = false
 
     fun start() {
+        // All codec/EGL/ImageReader work is owned by the camera worker looper.
+        background.post { startOnWorker() }
+    }
+
+    private fun startOnWorker() {
         try {
             configureEncoderWithFallback()
             val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
@@ -59,7 +70,8 @@ class DigLogV3Engine(
                     val pts = if (firstTimestampNs < 0L) {
                         firstTimestampNs = image.timestamp
                         0L
-                    } else image.timestamp - firstTimestampNs
+                    } else (image.timestamp - firstTimestampNs).coerceAtLeast(lastPresentationNs + 1L)
+                    lastPresentationNs = pts
                     renderer?.draw(YuvFrame.from(image), pts)
                     drainEncoder(false)
                 } catch (t: Throwable) {
@@ -100,7 +112,23 @@ class DigLogV3Engine(
         }
     }
 
+    fun outputIsValid(): Boolean = muxerStarted && muxerStopped && encodedSamples > 0 &&
+        lastPresentationNs > 0L && output.isFile && output.length() > 1_024L
+
     fun stop(): Boolean {
+        // Stop is frequently called from an Activity callback. Keep codec draining,
+        // muxing, EGL destruction, and Camera2 teardown on the owning worker thread.
+        if (Thread.currentThread() == background.looper.thread) return stopOnWorker()
+        val finished = CountDownLatch(1)
+        var success = false
+        background.post {
+            success = stopOnWorker()
+            finished.countDown()
+        }
+        return finished.await(6, TimeUnit.SECONDS) && success
+    }
+
+    private fun stopOnWorker(): Boolean {
         if (!running.getAndSet(false)) { release(); return false }
         return try {
             runCatching { session?.stopRepeating() }
@@ -173,6 +201,7 @@ class DigLogV3Engine(
                         data.position(info.offset)
                         data.limit(info.offset + info.size)
                         muxer!!.writeSampleData(trackIndex, data, info)
+                        encodedSamples++
                     }
                     val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
@@ -196,8 +225,10 @@ class DigLogV3Engine(
         runCatching { renderer?.release() }; renderer = null
         runCatching { codec?.stop() }
         runCatching { codec?.release() }; codec = null
-        if (muxerStarted) runCatching { muxer?.stop() }
-        muxerStarted = false
+        if (muxerStarted) {
+            muxerStopped = runCatching { muxer?.stop() }.isSuccess
+        }
+        // Keep muxerStarted as a finalization fact for output validation.
         runCatching { muxer?.release() }; muxer = null
         runCatching { encoderSurface?.release() }; encoderSurface = null
     }
@@ -213,29 +244,14 @@ class DigLogV3Engine(
             fun from(image: Image): YuvFrame {
                 require(image.format == ImageFormat.YUV_420_888)
                 return YuvFrame(
-                    copyPlane(image.planes[0], image.width, image.height),
-                    copyPlane(image.planes[1], image.width / 2, image.height / 2),
-                    copyPlane(image.planes[2], image.width / 2, image.height / 2),
+                    Yuv420FrameConverter.copyPlane(image.planes[0], image.width, image.height),
+                    Yuv420FrameConverter.copyPlane(image.planes[1], image.width / 2, image.height / 2),
+                    Yuv420FrameConverter.copyPlane(image.planes[2], image.width / 2, image.height / 2),
                     image.width,
                     image.height,
                 )
             }
 
-            private fun copyPlane(plane: Image.Plane, width: Int, height: Int): ByteBuffer {
-                val src = plane.buffer.duplicate()
-                val out = ByteBuffer.allocateDirect(width * height).order(ByteOrder.nativeOrder())
-                val rowStride = plane.rowStride
-                val pixelStride = plane.pixelStride
-                for (row in 0 until height) {
-                    val rowStart = row * rowStride
-                    for (col in 0 until width) {
-                        val offset = rowStart + col * pixelStride
-                        out.put(if (offset < src.limit()) src.get(offset) else 0)
-                    }
-                }
-                out.flip()
-                return out
-            }
         }
     }
 
@@ -386,16 +402,15 @@ class DigLogV3Engine(
                 }
 
                 float digLog(float x) {
-                    // A grading-oriented SDR log encoding: lifted toe, compressed
-                    // upper mids, and a soft highlight shoulder. It does not claim
-                    // extra sensor dynamic range; it preserves more of the ISP output.
+                    // DigLogTransferFunction.encode mirrored in GLSL: exponential
+                    // toe then logarithmic body, applied before encoder submission.
                     x = max(x, 0.0);
-                    float toe = 0.055 + 0.19 * sqrt(clamp(x, 0.0, 0.18) / 0.18);
-                    float logPart = 0.245 + 0.52 * log2(1.0 + 7.5 * x) / log2(8.5);
-                    float y = mix(toe, logPart, smoothstep(0.06, 0.22, x));
-                    float shoulder = 1.0 - exp(-2.0 * max(x - 0.68, 0.0));
-                    y -= shoulder * 0.08;
-                    return clamp(y, 0.0, 0.94);
+                    const float gray = 0.18;
+                    const float toeAtGray = 0.28 * (1.0 - exp(-gray / 0.18));
+                    float encoded = x <= gray
+                        ? 0.28 * (1.0 - exp(-x / 0.18))
+                        : toeAtGray + 0.28 + 0.38 * log(1.0 + 2.4 * (x - gray));
+                    return clamp(encoded, 0.0, 1.0);
                 }
 
                 void main() {

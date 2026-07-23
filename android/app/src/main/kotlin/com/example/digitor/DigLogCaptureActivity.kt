@@ -56,15 +56,12 @@ class DigLogCaptureActivity : Activity() {
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var recorder: MediaRecorder? = null
-    private var digLog10: DigLog10Engine? = null
     private var digLogV3: DigLogV3Engine? = null
-    private var usingTenBit = false
     private var backgroundThread: HandlerThread? = null
     private var background: Handler? = null
     private var recording = false
     private var outputFile: File? = null
     private lateinit var cameraId: String
-    private var internalBitDepth = 8
     private var videoSize = Size(1920, 1080)
     private var previewSize = Size(1920, 1080)
     private var activeCodec = "H.264"
@@ -75,7 +72,6 @@ class DigLogCaptureActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cameraId = intent.getStringExtra(EXTRA_CAMERA_ID) ?: run { finishCanceled("Camera unavailable"); return }
-        internalBitDepth = intent.getIntExtra(EXTRA_BIT_DEPTH, 8)
         selectedOutputTree = getSharedPreferences(PREFS, MODE_PRIVATE)
             .getString(PREF_OUTPUT_TREE, null)?.let(Uri::parse)
         buildUi()
@@ -204,8 +200,8 @@ class DigLogCaptureActivity : Activity() {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         val c = manager.getCameraCharacteristics(cameraId)
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
-        val maxWidth = if (internalBitDepth >= 10) 3840 else 1920
-        val maxHeight = if (internalBitDepth >= 10) 2160 else 1080
+        val maxWidth = 1920
+        val maxHeight = 1080
         val candidates = map.getOutputSizes(MediaRecorder::class.java).orEmpty()
             .filter { it.width * 9 == it.height * 16 && it.width <= maxWidth && it.height <= maxHeight }
             .sortedByDescending { it.width * it.height }
@@ -245,58 +241,17 @@ class DigLogCaptureActivity : Activity() {
             override fun onConfigured(s: CameraCaptureSession) {
                 session = s
                 s.setRepeatingRequest(builder.build(), null, background)
-                runOnUiThread { record.isEnabled = true; status.text = if (internalBitDepth >= 10) "DigLog10 Ready" else "DigLog8 Flat Ready" }
+                runOnUiThread { record.isEnabled = true; status.text = "DigLog Ready" }
             }
             override fun onConfigureFailed(s: CameraCaptureSession) { finishCanceled("Preview configuration failed") }
         }, background)
     }
 
     private fun startRecording() {
-        if (internalBitDepth == 10 && android.os.Build.VERSION.SDK_INT >= 33) {
-            startTenBitRecording()
-        } else {
-            startEightBitRecording()
-        }
-    }
-
-    private fun startTenBitRecording() {
-        val device = camera ?: return
-        closeSession()
-        outputFile = createOutputFile()
-        usingTenBit = true
-        record.isEnabled = false
-        status.text = "DigLog preparing"
-        val engine = DigLog10Engine(
-            camera = device,
-            cameraId = cameraId,
-            size = videoSize,
-            fps = 30,
-            bitrate = calculateTenBitBitrate(),
-            output = outputFile!!,
-            previewSurface = preview.surfaceTexture?.let { texture ->
-                texture.setDefaultBufferSize(previewSize.width, previewSize.height)
-                Surface(texture)
-            },
-            background = background ?: return,
-            onReady = {
-                recording = true
-                runOnUiThread { record.isEnabled = true; record.text = "STOP"; status.text = "DigLog • REC" }
-            },
-            onError = { message ->
-                // Some OEMs advertise P010/Main10 but reject the combined stream at runtime.
-                // Remove the incomplete file and transparently use verified DigLog 8.
-                digLog10?.stop(); digLog10 = null
-                outputFile?.delete()
-                usingTenBit = false
-                internalBitDepth = 8
-                runOnUiThread {
-                    Toast.makeText(this, "$message. Using compatible DigLog engine.", Toast.LENGTH_LONG).show()
-                    startEightBitRecording()
-                }
-            }
-        )
-        digLog10 = engine
-        engine.start()
+        // The V3 renderer is an SDR 8-bit EGL path. Never label it Main10 merely
+        // because a device advertises P010/Main10; capability detection records that
+        // diagnostic separately and this capture path always reports its actual depth.
+        startEightBitRecording()
     }
 
     private fun startEightBitRecording() {
@@ -304,7 +259,6 @@ class DigLogCaptureActivity : Activity() {
         try {
             closeSession()
             outputFile = createOutputFile()
-            usingTenBit = false
             record.isEnabled = false
             status.text = "DigLog V3 preparing"
 
@@ -346,17 +300,12 @@ class DigLogCaptureActivity : Activity() {
     private fun stopRecording() {
         if (!recording) return
         recording = false
-        val success = if (usingTenBit) {
-            val ok = digLog10?.stop() == true
-            digLog10 = null
-            ok
-        } else {
-            val ok = digLogV3?.stop() == true
-            digLogV3 = null
-            ok
-        }
+        val engine = digLogV3
+        val success = engine?.stop() == true
+        val outputValid = engine?.outputIsValid() == true
+        digLogV3 = null
         val file = outputFile
-        if (!success || file == null || !file.exists() || file.length() == 0L) {
+        if (!success || !outputValid || file == null || !file.exists() || file.length() <= 1_024L) {
             file?.delete(); finishCanceled("Recording failed"); return
         }
         val metadataFile = writeMetadata(file)
@@ -551,12 +500,14 @@ class DigLogCaptureActivity : Activity() {
     private fun writeMetadata(file: File): File {
         val json = JSONObject().apply {
             put("profile", "DigLog")
-            put("engineBitDepth", internalBitDepth)
-            put("gamma", if (usingTenBit) "DigLog10 Gamma v1" else "DigLog V3 GPU Gamma")
-            put("capture", if (usingTenBit) "Camera2 P010 → OpenGL ES 16-bit DigLog transform → HEVC Main10" else "Camera2 preview surface + YUV_420_888 ImageReader → OpenGL ES DigLog transform → encoder-only EGL surface")
-            put("codec", if (usingTenBit) "HEVC Main10" else activeCodec)
-            put("audio", if (usingTenBit) false else activeAudio)
-            put("bitrate", if (usingTenBit) calculateTenBitBitrate() else calculateBitrate())
+            put("engineVersion", "DigLog V3")
+            put("requestedBitDepth", 8)
+            put("actualBitDepth", 8)
+            put("transferFunction", "DigLog")
+            put("capture", "Camera2 preview surface + YUV_420_888 ImageReader → OpenGL ES DigLog transform → encoder-only EGL surface")
+            put("codec", activeCodec)
+            put("audio", activeAudio)
+            put("bitrate", calculateBitrate())
             put("width", videoSize.width)
             put("height", videoSize.height)
             put("fps", 30)
@@ -619,7 +570,6 @@ class DigLogCaptureActivity : Activity() {
     }
 
     override fun onDestroy() {
-        digLog10?.stop(); digLog10 = null
         digLogV3?.stop(); digLogV3 = null
         closeSession(); camera?.close(); recorder?.release(); stopBackground(); super.onDestroy()
     }

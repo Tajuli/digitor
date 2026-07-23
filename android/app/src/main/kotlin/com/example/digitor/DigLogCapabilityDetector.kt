@@ -72,17 +72,9 @@ class DigLogCapabilityDetector(private val context: Context) {
                 ?.getOutputSizes(MediaRecorder::class.java)
                 ?.isNotEmpty() == true
 
-            val professionalLevel = level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
-                level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
-            val supportsTenBit = professionalLevel && manualSensor && manualPost &&
-                toneCurve && p010 && main10
-
-            if (supportsTenBit) {
-                return Result(
-                    true, id, 10, "DigLog 10 ready", levelName,
-                    manualSensor, manualPost, toneCurve, hevc, main10, p010,
-                )
-            }
+            // A Main10/P010 advertisement is insufficient. The current public
+            // renderer has no validated 10-bit encoder-surface path, so this report
+            // deliberately selects 8-bit until a complete path is runtime-proven.
 
             // Flexible low-end path: LEGACY/LIMITED cameras are accepted when they can
             // create a normal video stream and the device has AVC or HEVC encoding.
