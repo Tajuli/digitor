@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.hardware.camera2.*
 import android.hardware.camera2.params.TonemapCurve
+import android.media.MediaCodecList
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
@@ -252,19 +253,56 @@ class DigLogCaptureActivity : Activity() {
     }
 
     private fun applyDigLogControls(builder: CaptureRequest.Builder) {
-        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        builder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-        builder.set(CaptureRequest.CONTROL_AE_LOCK, true)
-        builder.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
-        builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-        builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-        builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL)
-        builder.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF)
-        builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_OFF)
-        builder.set(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
-        builder.set(CaptureRequest.TONEMAP_CURVE, buildDigLogCurve())
-        builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(30, 30))
+        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+        val characteristics = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
+        val requestKeys = characteristics?.availableCaptureRequestKeys?.toSet().orEmpty()
+
+        fun <T> setIfSupported(key: CaptureRequest.Key<T>, value: T) {
+            if (requestKeys.contains(key)) runCatching { builder.set(key, value) }
+        }
+
+        setIfSupported(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        setIfSupported(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+        setIfSupported(CaptureRequest.CONTROL_AE_LOCK, true)
+        setIfSupported(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        setIfSupported(CaptureRequest.CONTROL_AWB_LOCK, true)
+        setIfSupported(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+
+        val noiseModes = characteristics?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.toSet().orEmpty()
+        when {
+            noiseModes.contains(CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL) ->
+                setIfSupported(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL)
+            noiseModes.contains(CameraMetadata.NOISE_REDUCTION_MODE_FAST) ->
+                setIfSupported(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_FAST)
+        }
+
+        val edgeModes = characteristics?.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.toSet().orEmpty()
+        when {
+            edgeModes.contains(CameraMetadata.EDGE_MODE_OFF) ->
+                setIfSupported(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF)
+            edgeModes.contains(CameraMetadata.EDGE_MODE_FAST) ->
+                setIfSupported(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_FAST)
+        }
+
+        val aberrationModes = characteristics?.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)?.toSet().orEmpty()
+        if (aberrationModes.contains(CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_OFF)) {
+            setIfSupported(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CameraMetadata.COLOR_CORRECTION_ABERRATION_MODE_OFF)
+        }
+
+        val toneModes = characteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
+        if (toneModes.contains(CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE) &&
+            requestKeys.contains(CaptureRequest.TONEMAP_CURVE)) {
+            setIfSupported(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
+            setIfSupported(CaptureRequest.TONEMAP_CURVE, buildDigLogCurve())
+        } else if (toneModes.contains(CameraMetadata.TONEMAP_MODE_FAST)) {
+            setIfSupported(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_FAST)
+        }
+
+        setIfSupported(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+        val fpsRanges = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+        val fps = fpsRanges.firstOrNull { it.lower <= 30 && it.upper >= 30 }
+            ?: fpsRanges.maxByOrNull { it.upper }
+        if (fps != null) setIfSupported(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
     }
 
     /** Mobile-optimized logarithmic curve with a protected toe and soft highlight shoulder. */
@@ -295,13 +333,22 @@ class DigLogCaptureActivity : Activity() {
         r.setVideoEncodingBitRate(calculateBitrate())
         r.setVideoFrameRate(30)
         r.setVideoSize(videoSize.width, videoSize.height)
-        r.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
+        r.setVideoEncoder(
+            if (hasEncoder("video/hevc")) MediaRecorder.VideoEncoder.HEVC
+            else MediaRecorder.VideoEncoder.H264
+        )
         r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
         r.setAudioEncodingBitRate(192_000)
         r.setAudioSamplingRate(48_000)
         r.prepare()
         return r
     }
+
+
+    private fun hasEncoder(mime: String): Boolean =
+        MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
+            info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+        }
 
     private fun calculateTenBitBitrate(): Int {
         val pixels = videoSize.width.toLong() * videoSize.height
@@ -317,7 +364,7 @@ class DigLogCaptureActivity : Activity() {
         return when {
             pixels >= 3840L * 2160L -> 120_000_000
             pixels >= 2560L * 1440L -> 70_000_000
-            else -> 45_000_000
+            else -> if (videoSize.width >= 1920) 24_000_000 else 12_000_000
         }
     }
 
