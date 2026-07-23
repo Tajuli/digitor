@@ -185,7 +185,15 @@ class DigLogV31Engine(
     override fun stop(): Boolean {
         if (Thread.currentThread() == background.looper.thread) return stopWorker()
         val latch = CountDownLatch(1); var result = false
-        background.post { result = stopWorker(); latch.countDown() }
+        // Finalization must jump ahead of queued camera frames on low-end devices.
+        background.removeCallbacks(codecDrain)
+        background.postAtFrontOfQueue {
+            try {
+                result = stopWorker()
+            } finally {
+                latch.countDown()
+            }
+        }
         return latch.await(8, TimeUnit.SECONDS) && result
     }
 
