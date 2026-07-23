@@ -57,6 +57,10 @@ class DigLogV3Engine(
     private var encodedSamples = 0
     private var imageCount = 0
     private var muxerStopped = false
+    private var eosSubmitted = false
+    private var eosReceived = false
+    private var eosTimedOut = false
+    private var fatalError = false
     private val diagnostics = RecordingPipelineDiagnostics("DigLog V3", background, ::failOnce)
     private val codecDrain = object : Runnable {
         override fun run() {
@@ -147,7 +151,7 @@ class DigLogV3Engine(
     }
 
     override fun outputIsValid(): Boolean = muxerStarted && muxerStopped && encodedSamples > 0 &&
-        output.isFile && output.length() > 1_024L
+        !fatalError && !eosTimedOut && output.isFile && output.length() > 1_024L
 
     override fun stop(): Boolean {
         // Stop is frequently called from an Activity callback. Keep codec draining,
@@ -165,17 +169,25 @@ class DigLogV3Engine(
     private fun stopOnWorker(): Boolean {
         if (!running.getAndSet(false)) { release(); return false }
         return try {
-            runCatching { session?.stopRepeating() }
-            runCatching { session?.abortCaptures() }
-            codec?.signalEndOfInputStream()
-            diagnostics.mark(RecordingPipelineDiagnostics.EOS_SUBMITTED)
-            diagnostics.expect(RecordingPipelineDiagnostics.EOS_RECEIVED)
-
-            val deadlineMs = SystemClock.elapsedRealtime() + EOS_DRAIN_TIMEOUT_MS
-            var eosReceived = false
-            while (!eosReceived && SystemClock.elapsedRealtime() < deadlineMs) {
-                eosReceived = drainEncoder(true)
+            session?.let { activeSession ->
+                runCatching { activeSession.stopRepeating() }
+                runCatching { activeSession.abortCaptures() }
+                runCatching { activeSession.close() }
             }
+            session = null
+            if (!eosSubmitted) {
+                codec?.signalEndOfInputStream()
+                eosSubmitted = true
+                diagnostics.mark(RecordingPipelineDiagnostics.EOS_SUBMITTED)
+                Log.d("DigLogV3", "EOS submitted")
+            }
+
+            Log.d("DigLogV3", "Waiting for encoder EOS")
+            val deadlineMs = SystemClock.elapsedRealtime() + EOS_DRAIN_TIMEOUT_MS
+            while (!eosReceived && SystemClock.elapsedRealtime() < deadlineMs) {
+                drainEncoder(true) // INFO_TRY_AGAIN_LATER only means keep polling.
+            }
+            if (!eosReceived) eosTimedOut = true
             check(eosReceived) { diagnostics.stopped("timed out waiting for encoder EOS") }
             check(encodedSamples > 0) {
                 diagnostics.stopped("no encoded frames were written")
@@ -183,9 +195,10 @@ class DigLogV3Engine(
 
             // EOS has been observed, so the muxer can now finalize the MP4 safely.
             release()
-            check(outputIsValid()) {
-                diagnostics.stopped("final output verification failed")
-            }
+            val valid = outputIsValid()
+            Log.d("DigLogV3", "Output validation: samples=$encodedSamples, bytes=${output.length()}, success=$valid")
+            check(valid) { diagnostics.stopped("final output verification failed") }
+            Log.d("DigLogV3", "Recording completed successfully")
             true
         } catch (t: Throwable) {
             failOnce(if (t.message?.contains("recording pipeline stopped at stage:") == true) t.message!!
@@ -262,7 +275,12 @@ class DigLogV3Engine(
                     }
                     val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     encoder.releaseOutputBuffer(index, false)
-                    if (eos) { diagnostics.mark(RecordingPipelineDiagnostics.EOS_RECEIVED); return true }
+                    if (eos) {
+                        eosReceived = true
+                        diagnostics.mark(RecordingPipelineDiagnostics.EOS_RECEIVED)
+                        Log.d("DigLogV3", "Encoder EOS received")
+                        return true
+                    }
                 }
             }
         }
@@ -270,6 +288,8 @@ class DigLogV3Engine(
 
     private fun failOnce(message: String) {
         if (!failed.compareAndSet(false, true)) return
+        fatalError = true
+        Log.e("DigLogV3", "Recording failed: $message")
         running.set(false)
         release()
         onError(message)
@@ -284,11 +304,18 @@ class DigLogV3Engine(
 
         // MediaMuxer must be stopped only after EOS has been drained on the normal path.
         muxer?.let { activeMuxer ->
-            if (diagnostics.completed(RecordingPipelineDiagnostics.EOS_RECEIVED) && muxerStarted) {
-                muxerStopped = runCatching { activeMuxer.stop() }.isSuccess
-                if (muxerStopped) {
+            if (eosReceived && muxerStarted && !muxerStopped) {
+                // This is the sole muxer stop owner. Mark it before subsequent
+                // cleanup so re-entrant error paths cannot stop it again.
+                muxerStopped = true
+                try {
+                    activeMuxer.stop()
                     diagnostics.mark(RecordingPipelineDiagnostics.MUXER_STOPPED)
                     diagnostics.finalFileSize(output.length())
+                    Log.d("DigLogV3", "Muxer stopped")
+                } catch (t: Throwable) {
+                    fatalError = true
+                    Log.e("DigLogV3", "Recording failed: muxer stop failed", t)
                 }
             }
             runCatching { activeMuxer.release() }

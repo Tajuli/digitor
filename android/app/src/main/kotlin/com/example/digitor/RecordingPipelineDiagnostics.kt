@@ -64,7 +64,12 @@ internal class RecordingPipelineDiagnostics(
     fun completed(stage: Int): Boolean = completed[stage]
 
     private fun expectNext() {
-        completed.indexOfFirst { !it }.takeIf { it >= 0 }?.let(::expect)
+        // Encoder shutdown is driven explicitly by the engine and can legitimately
+        // take up to its EOS drain timeout. Never arm the normal short watchdog
+        // for either asynchronous shutdown stage.
+        val next = completed.indexOfFirst { !it }
+        if (next < 0 || next == EOS_SUBMITTED || next == EOS_RECEIVED) return
+        expect(next)
     }
 
     companion object {
