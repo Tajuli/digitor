@@ -14,6 +14,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.RgbMatrix
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -282,6 +283,15 @@ class MainActivity : FlutterActivity() {
             height,
             Presentation.LAYOUT_SCALE_TO_FIT,
         )
+        val videoEffects = mutableListOf<Effect>()
+        val colorMatrix = (clip["colorMatrix"] as? List<*>)
+            ?.mapNotNull { (it as? Number)?.toFloat() }
+            ?.takeIf { it.size == 16 }
+        if (colorMatrix != null && !isIdentityColorMatrix(colorMatrix)) {
+            videoEffects.add(ExportColorMatrix(colorMatrix.toFloatArray()))
+        }
+        videoEffects.add(presentation)
+
         return EditedMediaItem.Builder(mediaBuilder.build())
             .setDurationUs(durationMs * 1000)
             .setFrameRate(frameRate)
@@ -289,10 +299,24 @@ class MainActivity : FlutterActivity() {
             .setEffects(
                 Effects(
                     ImmutableList.of(),
-                    ImmutableList.of<Effect>(presentation),
+                    ImmutableList.copyOf(videoEffects),
                 ),
             )
             .build()
+    }
+
+    private fun isIdentityColorMatrix(matrix: List<Float>): Boolean {
+        val identity = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
+        )
+        return matrix.indices.all { kotlin.math.abs(matrix[it] - identity[it]) < 0.00001f }
+    }
+
+    private class ExportColorMatrix(private val matrix: FloatArray) : RgbMatrix {
+        override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix
     }
 
     private fun getProgress(result: MethodChannel.Result) {
