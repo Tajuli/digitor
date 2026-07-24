@@ -778,7 +778,7 @@ class _CurveEditorState extends State<_CurveEditor> {
           onPanUpdate: (details) => _moveActive(details.localPosition, size),
           onPanEnd: (_) => _activePoint = null,
           onPanCancel: () => _activePoint = null,
-          onDoubleTapDown: (details) {
+          onLongPressStart: (details) {
             final position = _normalized(details.localPosition, size);
             final next = [...points, position]..sort((a, b) => a.dx.compareTo(b.dx));
             widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
