@@ -219,8 +219,14 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
               final size = math.min(constraints.maxWidth - 12, 132.0).clamp(88.0, 132.0).toDouble();
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onPanDown: (details) => _setWheelFromPosition(details.localPosition, size, value, onChanged),
-                onPanUpdate: (details) => _setWheelFromPosition(details.localPosition, size, value, onChanged),
+                onHorizontalDragDown: (details) =>
+                    _setWheelFromPosition(details.localPosition, size, value, onChanged),
+                onHorizontalDragUpdate: (details) =>
+                    _setWheelFromPosition(details.localPosition, size, value, onChanged),
+                onVerticalDragDown: (details) =>
+                    _setWheelFromPosition(details.localPosition, size, value, onChanged),
+                onVerticalDragUpdate: (details) =>
+                    _setWheelFromPosition(details.localPosition, size, value, onChanged),
                 onDoubleTap: () => onChanged(value.copyWith(chroma: Offset.zero)),
                 child: CustomPaint(
                   size: Size.square(size),
