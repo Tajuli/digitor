@@ -383,15 +383,85 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
 
   Widget _wide(String label,double value,double min,double max,ValueChanged<double> change)=>Row(children:[SizedBox(width:90,child:Text(label,style:const TextStyle(color:Colors.white70))),Expanded(child:Slider(value:value.clamp(min,max).toDouble(),min:min,max:max,onChanged:change)),SizedBox(width:48,child:Text(value.toStringAsFixed(2),style:const TextStyle(color:Colors.white70)))]);
 
-  Widget _curves(){final c=node.curves; return Column(children:[
-    Padding(padding:const EdgeInsets.all(10),child:Row(children:[for(final ch in CurveChannel.values) _channelButton(ch,c.channel),const Spacer(),const Text('Drag points · double tap to add',style:TextStyle(color:Colors.white38,fontSize:11))])),
-    Expanded(child:Padding(padding:const EdgeInsets.fromLTRB(12,0,12,8),child:_CurveEditor(settings:c,onChanged:(v)=>_replace(node.copyWith(curves:v))))),
-    Padding(padding:const EdgeInsets.symmetric(horizontal:12),child:Column(children:[_curveSlider('Low Soft',c.lowSoft,(v)=>_curve(c.copyWith(lowSoft:v))),_curveSlider('High Soft',c.highSoft,(v)=>_curve(c.copyWith(highSoft:v)))])),
-  ]);}
-  void _curve(ColorCurveSettings c)=>_replace(node.copyWith(curves:c));
-  Widget _channelButton(CurveChannel ch,CurveChannel selected)=>Padding(padding:const EdgeInsets.only(right:6),child:ChoiceChip(label:Text(ch.name.toUpperCase()),selected:ch==selected,onSelected:(_)=>_curve(node.curves.copyWith(channel:ch)),selectedColor:_channelColor(ch),backgroundColor:const Color(0xff303238),labelStyle:TextStyle(color:ch==selected?Colors.black:Colors.white)));
-  Color _channelColor(CurveChannel c)=>switch(c){CurveChannel.y=>Colors.white,CurveChannel.r=>Colors.redAccent,CurveChannel.g=>Colors.greenAccent,CurveChannel.b=>Colors.blueAccent};
-  Widget _curveSlider(String t,double v,ValueChanged<double> f)=>Row(children:[SizedBox(width:80,child:Text(t,style:const TextStyle(color:Colors.white60))),Expanded(child:Slider(value:v,min:0,max:1,onChanged:f)),Text((v*100).toStringAsFixed(0),style:const TextStyle(color:Colors.white70))]);
+  Widget _curves() {
+    final curves = node.curves;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: curves.previewEnabled
+                    ? 'Disable curves preview'
+                    : 'Enable curves preview',
+                onPressed: () =>
+                    _curve(curves.copyWith(previewEnabled: !curves.previewEnabled)),
+                style: IconButton.styleFrom(
+                  backgroundColor:
+                      curves.previewEnabled ? Colors.white12 : Colors.transparent,
+                ),
+                icon: Icon(
+                  curves.previewEnabled
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded,
+                  color: curves.previewEnabled ? Colors.white : Colors.white38,
+                ),
+              ),
+              const SizedBox(width: 4),
+              for (final channel in CurveChannel.values)
+                _channelButton(channel, curves.channel),
+              const Spacer(),
+              const Text(
+                'Drag points · double tap to add',
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: IgnorePointer(
+              ignoring: !curves.previewEnabled,
+              child: Opacity(
+                opacity: curves.previewEnabled ? 1 : .45,
+                child: _CurveEditor(
+                  settings: curves,
+                  onChanged: (value) =>
+                      _replace(node.copyWith(curves: value)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _curve(ColorCurveSettings value) =>
+      _replace(node.copyWith(curves: value));
+
+  Widget _channelButton(CurveChannel channel, CurveChannel selected) => Padding(
+    padding: const EdgeInsets.only(right: 6),
+    child: ChoiceChip(
+      label: Text(channel == CurveChannel.y ? 'RGB' : channel.name.toUpperCase()),
+      selected: channel == selected,
+      onSelected: (_) => _curve(node.curves.copyWith(channel: channel)),
+      selectedColor: _channelColor(channel),
+      backgroundColor: const Color(0xff303238),
+      labelStyle: TextStyle(
+        color: channel == selected ? Colors.black : Colors.white,
+      ),
+    ),
+  );
+
+  Color _channelColor(CurveChannel channel) => switch (channel) {
+    CurveChannel.y => Colors.white,
+    CurveChannel.r => Colors.redAccent,
+    CurveChannel.g => Colors.greenAccent,
+    CurveChannel.b => Colors.blueAccent,
+  };
 
   Widget _qualifier(){
     final q=node.qualifier;
@@ -642,5 +712,156 @@ class _WheelPainter extends CustomPainter {
   bool shouldRepaint(covariant _WheelPainter oldDelegate) => oldDelegate.chroma != chroma;
 }
 
-class _CurveEditor extends StatelessWidget{const _CurveEditor({required this.settings,required this.onChanged});final ColorCurveSettings settings;final ValueChanged<ColorCurveSettings> onChanged;@override Widget build(BuildContext context){return LayoutBuilder(builder:(context,b){final pts=settings.pointsFor(settings.channel);return GestureDetector(onDoubleTapDown:(d){final p=Offset((d.localPosition.dx/b.maxWidth).clamp(0,1).toDouble(),1-(d.localPosition.dy/b.maxHeight).clamp(0,1).toDouble());final n=[...pts,p]..sort((a,b)=>a.dx.compareTo(b.dx));onChanged(settings.withPoints(settings.channel,n));},onPanUpdate:(d){if(pts.length<=2)return;final pos=Offset((d.localPosition.dx/b.maxWidth).clamp(0,1).toDouble(),1-(d.localPosition.dy/b.maxHeight).clamp(0,1).toDouble());var nearest=1;var dist=double.infinity;for(var i=1;i<pts.length-1;i++){final dd=(pts[i]-pos).distance;if(dd<dist){dist=dd;nearest=i;}}final n=[...pts];n[nearest]=Offset(pos.dx.clamp(n[nearest-1].dx+.01,n[nearest+1].dx-.01).toDouble(),pos.dy);onChanged(settings.withPoints(settings.channel,n));},child:CustomPaint(size:Size.infinite,painter:_CurvePainter(pts,settings.channel)));});}}
-class _CurvePainter extends CustomPainter{_CurvePainter(this.points,this.channel);final List<Offset> points;final CurveChannel channel;@override void paint(Canvas c,Size s){c.drawRect(Offset.zero&s,Paint()..color=const Color(0xff17181c));final grid=Paint()..color=Colors.white10..strokeWidth=1;for(int i=1;i<8;i++){c.drawLine(Offset(s.width*i/8,0),Offset(s.width*i/8,s.height),grid);c.drawLine(Offset(0,s.height*i/8),Offset(s.width,s.height*i/8),grid);}final path=Path();for(int i=0;i<points.length;i++){final p=Offset(points[i].dx*s.width,(1-points[i].dy)*s.height);if(i==0)path.moveTo(p.dx,p.dy);else path.lineTo(p.dx,p.dy);}final color=switch(channel){CurveChannel.y=>Colors.white,CurveChannel.r=>Colors.redAccent,CurveChannel.g=>Colors.greenAccent,CurveChannel.b=>Colors.blueAccent};c.drawPath(path,Paint()..color=color..strokeWidth=2..style=PaintingStyle.stroke);for(final v in points){final p=Offset(v.dx*s.width,(1-v.dy)*s.height);c.drawCircle(p,5,Paint()..color=const Color(0xff17181c));c.drawCircle(p,3,Paint()..color=color);}}@override bool shouldRepaint(covariant _CurvePainter old)=>old.points!=points||old.channel!=channel;}
+class _CurveEditor extends StatefulWidget {
+  const _CurveEditor({required this.settings, required this.onChanged});
+
+  final ColorCurveSettings settings;
+  final ValueChanged<ColorCurveSettings> onChanged;
+
+  @override
+  State<_CurveEditor> createState() => _CurveEditorState();
+}
+
+class _CurveEditorState extends State<_CurveEditor> {
+  int? _activePoint;
+
+  Offset _normalized(Offset local, Size size) => Offset(
+    (local.dx / size.width).clamp(0.0, 1.0).toDouble(),
+    1 - (local.dy / size.height).clamp(0.0, 1.0).toDouble(),
+  );
+
+  int? _nearestPoint(List<Offset> points, Offset position, Size size) {
+    int? nearest;
+    var bestPixels = 22.0;
+    for (var i = 0; i < points.length; i++) {
+      final pixel = Offset(points[i].dx * size.width, (1 - points[i].dy) * size.height);
+      final distance = (pixel - position).distance;
+      if (distance < bestPixels) {
+        bestPixels = distance;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
+
+  void _moveActive(Offset local, Size size) {
+    final points = widget.settings.pointsFor(widget.settings.channel);
+    final index = _activePoint;
+    if (index == null || index < 0 || index >= points.length) return;
+
+    final position = _normalized(local, size);
+    final next = [...points];
+    if (index == 0) {
+      next[index] = Offset(0, position.dy);
+    } else if (index == points.length - 1) {
+      next[index] = Offset(1, position.dy);
+    } else {
+      final minX = next[index - 1].dx + .005;
+      final maxX = next[index + 1].dx - .005;
+      next[index] = Offset(position.dx.clamp(minX, maxX).toDouble(), position.dy);
+    }
+    widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final points = widget.settings.pointsFor(widget.settings.channel);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanDown: (details) {
+            _activePoint = _nearestPoint(points, details.localPosition, size);
+            if (_activePoint != null) _moveActive(details.localPosition, size);
+          },
+          onPanUpdate: (details) => _moveActive(details.localPosition, size),
+          onPanEnd: (_) => _activePoint = null,
+          onPanCancel: () => _activePoint = null,
+          onDoubleTapDown: (details) {
+            final position = _normalized(details.localPosition, size);
+            final next = [...points, position]..sort((a, b) => a.dx.compareTo(b.dx));
+            widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
+          },
+          onLongPressStart: (details) {
+            final index = _nearestPoint(points, details.localPosition, size);
+            if (index == null || index == 0 || index == points.length - 1) return;
+            final next = [...points]..removeAt(index);
+            widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
+          },
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: _CurvePainter(points, widget.settings.channel),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CurvePainter extends CustomPainter {
+  _CurvePainter(this.points, this.channel);
+
+  final List<Offset> points;
+  final CurveChannel channel;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xff17181c));
+
+    final grid = Paint()
+      ..color = Colors.white10
+      ..strokeWidth = 1;
+    for (var i = 1; i < 8; i++) {
+      canvas.drawLine(Offset(size.width * i / 8, 0), Offset(size.width * i / 8, size.height), grid);
+      canvas.drawLine(Offset(0, size.height * i / 8), Offset(size.width, size.height * i / 8), grid);
+    }
+
+    final sorted = [...points]..sort((a, b) => a.dx.compareTo(b.dx));
+    final pixels = sorted
+        .map((point) => Offset(point.dx * size.width, (1 - point.dy) * size.height))
+        .toList();
+
+    final color = switch (channel) {
+      CurveChannel.y => Colors.white,
+      CurveChannel.r => Colors.redAccent,
+      CurveChannel.g => Colors.greenAccent,
+      CurveChannel.b => Colors.blueAccent,
+    };
+
+    final path = Path();
+    if (pixels.isNotEmpty) {
+      path.moveTo(pixels.first.dx, pixels.first.dy);
+      for (var i = 0; i < pixels.length - 1; i++) {
+        final p0 = i > 0 ? pixels[i - 1] : pixels[i];
+        final p1 = pixels[i];
+        final p2 = pixels[i + 1];
+        final p3 = i + 2 < pixels.length ? pixels[i + 2] : p2;
+        final c1 = p1 + (p2 - p0) / 6;
+        final c2 = p2 - (p3 - p1) / 6;
+        path.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, p2.dx, p2.dy);
+      }
+    }
+
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke
+        ..isAntiAlias = true,
+    );
+    canvas.restore();
+
+    for (final point in pixels) {
+      canvas.drawCircle(point, 6, Paint()..color = const Color(0xff17181c));
+      canvas.drawCircle(point, 3.5, Paint()..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CurvePainter oldDelegate) =>
+      oldDelegate.points != points || oldDelegate.channel != channel;
+}
