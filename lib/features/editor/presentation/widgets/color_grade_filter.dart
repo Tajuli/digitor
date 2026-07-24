@@ -167,14 +167,20 @@ class ColorGradeFilter extends StatelessWidget {
 
 
   static List<double> _wheelMatrix(ColorWheelSettings wheels) {
-    final lift = _wheelRgb(wheels.lift, chromaStrength: .18, luminanceStrength: 34);
-    final gamma = _wheelRgb(wheels.gamma, chromaStrength: .16, luminanceStrength: 22);
-    final gain = _wheelRgb(wheels.gain, chromaStrength: .24, luminanceStrength: .42);
-    final offset = _wheelRgb(wheels.offset, chromaStrength: .20, luminanceStrength: 42);
+    // Stronger Resolve-style primaries. Lift primarily changes the black point,
+    // gamma reshapes the middle range, gain controls highlights, and offset
+    // moves the whole signal. The matrix path is still real-time and is also
+    // shared with export, so preview and rendered output remain consistent.
+    final lift = _wheelRgb(wheels.lift, chromaStrength: .34, luminanceStrength: 58);
+    final gamma = _wheelRgb(wheels.gamma, chromaStrength: .32, luminanceStrength: .48);
+    final gain = _wheelRgb(wheels.gain, chromaStrength: .44, luminanceStrength: .78);
+    final offset = _wheelRgb(wheels.offset, chromaStrength: .38, luminanceStrength: 72);
 
-    final rScale = (1 + gamma.$1 + gain.$1 + gain.$4).clamp(.05, 3.0).toDouble();
-    final gScale = (1 + gamma.$2 + gain.$2 + gain.$4).clamp(.05, 3.0).toDouble();
-    final bScale = (1 + gamma.$3 + gain.$3 + gain.$4).clamp(.05, 3.0).toDouble();
+    final gammaLum = gamma.$4;
+    final gainLum = gain.$4;
+    final rScale = (1 + gamma.$1 + gammaLum + gain.$1 + gainLum).clamp(.03, 4.0).toDouble();
+    final gScale = (1 + gamma.$2 + gammaLum + gain.$2 + gainLum).clamp(.03, 4.0).toDouble();
+    final bScale = (1 + gamma.$3 + gammaLum + gain.$3 + gainLum).clamp(.03, 4.0).toDouble();
 
     final rBias = lift.$1 * 255 + lift.$4 + offset.$1 * 255 + offset.$4;
     final gBias = lift.$2 * 255 + lift.$4 + offset.$2 * 255 + offset.$4;
