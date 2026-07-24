@@ -24,6 +24,19 @@ class ColorGradeFilter extends StatelessWidget {
     );
   }
 
+  /// Returns the same grade used by the Flutter preview as a normalized
+  /// column-major 4x4 matrix for Android Media3 export. The fourth column
+  /// carries the RGB bias because video pixels have alpha = 1.
+  static List<double> exportMatrix4x4(ColorNodeGraph graph) {
+    final m = _matrixForGraph(graph);
+    return <double>[
+      m[0], m[5], m[10], 0,
+      m[1], m[6], m[11], 0,
+      m[2], m[7], m[12], 0,
+      m[4] / 255.0, m[9] / 255.0, m[14] / 255.0, 1,
+    ];
+  }
+
   static List<double> _matrixForGraph(ColorNodeGraph graph) {
     var m = _identity();
     for (final node in graph.nodes) {
