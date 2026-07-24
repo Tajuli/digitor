@@ -413,7 +413,7 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
                 _channelButton(channel, curves.channel),
               const Spacer(),
               const Text(
-                'Drag points · double tap to add',
+                'Hold empty area to add · select point to delete',
                 style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
             ],
@@ -421,7 +421,7 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
         ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(28, 18, 28, 26),
             child: IgnorePointer(
               ignoring: !curves.previewEnabled,
               child: Opacity(
@@ -724,6 +724,7 @@ class _CurveEditor extends StatefulWidget {
 
 class _CurveEditorState extends State<_CurveEditor> {
   int? _activePoint;
+  int? _selectedPoint;
 
   Offset _normalized(Offset local, Size size) => Offset(
     (local.dx / size.width).clamp(0.0, 1.0).toDouble(),
@@ -732,9 +733,12 @@ class _CurveEditorState extends State<_CurveEditor> {
 
   int? _nearestPoint(List<Offset> points, Offset position, Size size) {
     int? nearest;
-    var bestPixels = 22.0;
+    var bestPixels = 24.0;
     for (var i = 0; i < points.length; i++) {
-      final pixel = Offset(points[i].dx * size.width, (1 - points[i].dy) * size.height);
+      final pixel = Offset(
+        points[i].dx * size.width,
+        (1 - points[i].dy) * size.height,
+      );
       final distance = (pixel - position).distance;
       if (distance < bestPixels) {
         bestPixels = distance;
@@ -751,41 +755,109 @@ class _CurveEditorState extends State<_CurveEditor> {
 
     final position = _normalized(local, size);
     final next = [...points];
-    if (index == 0) {
-      next[index] = Offset(0, position.dy);
-    } else if (index == points.length - 1) {
-      next[index] = Offset(1, position.dy);
-    } else {
-      final minX = next[index - 1].dx + .005;
-      final maxX = next[index + 1].dx - .005;
-      next[index] = Offset(position.dx.clamp(minX, maxX).toDouble(), position.dy);
+    const spacing = .005;
+
+    final minX = index == 0 ? 0.0 : next[index - 1].dx + spacing;
+    final maxX = index == next.length - 1 ? 1.0 : next[index + 1].dx - spacing;
+    next[index] = Offset(
+      position.dx.clamp(minX, maxX).toDouble(),
+      position.dy,
+    );
+
+    widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
+  }
+
+  void _deleteSelected() {
+    final points = widget.settings.pointsFor(widget.settings.channel);
+    final index = _selectedPoint;
+    if (index == null || points.length <= 2 || index < 0 || index >= points.length) {
+      return;
     }
+
+    final next = [...points]..removeAt(index);
+    setState(() {
+      _selectedPoint = null;
+      _activePoint = null;
+    });
+    widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
+  }
+
+  void _addPoint(Offset local, Size size) {
+    final points = widget.settings.pointsFor(widget.settings.channel);
+    if (_nearestPoint(points, local, size) != null) return;
+
+    final position = _normalized(local, size);
+    final next = [...points, position]..sort((a, b) => a.dx.compareTo(b.dx));
+    final insertedIndex = next.indexOf(position);
+    setState(() => _selectedPoint = insertedIndex);
     widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
   }
 
   @override
   Widget build(BuildContext context) {
     final points = widget.settings.pointsFor(widget.settings.channel);
+    if (_selectedPoint != null && _selectedPoint! >= points.length) {
+      _selectedPoint = null;
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanDown: (details) {
-            _activePoint = _nearestPoint(points, details.localPosition, size);
-            if (_activePoint != null) _moveActive(details.localPosition, size);
-          },
-          onPanUpdate: (details) => _moveActive(details.localPosition, size),
-          onPanEnd: (_) => _activePoint = null,
-          onLongPressStart: (details) {
-            final position = _normalized(details.localPosition, size);
-            final next = [...points, position]..sort((a, b) => a.dx.compareTo(b.dx));
-            widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
-          },
-          child: CustomPaint(
-            size: Size.infinite,
-            painter: _CurvePainter(points, widget.settings.channel),
-          ),
+        final canDelete = _selectedPoint != null && points.length > 2;
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (details) {
+                  final index = _nearestPoint(points, details.localPosition, size);
+                  setState(() => _selectedPoint = index);
+                },
+                onPanDown: (details) {
+                  final index = _nearestPoint(points, details.localPosition, size);
+                  setState(() {
+                    _activePoint = index;
+                    _selectedPoint = index;
+                  });
+                  if (_activePoint != null) {
+                    _moveActive(details.localPosition, size);
+                  }
+                },
+                onPanUpdate: (details) => _moveActive(details.localPosition, size),
+                onPanEnd: (_) => _activePoint = null,
+                onPanCancel: () => _activePoint = null,
+                onLongPressStart: (details) =>
+                    _addPoint(details.localPosition, size),
+                child: CustomPaint(
+                  size: Size.infinite,
+                  painter: _CurvePainter(
+                    points,
+                    widget.settings.channel,
+                    selectedPoint: _selectedPoint,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Material(
+                color: const Color(0xaa292b30),
+                borderRadius: BorderRadius.circular(8),
+                child: IconButton(
+                  tooltip: canDelete ? 'Delete selected point' : 'Select a point to delete',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: canDelete ? _deleteSelected : null,
+                  icon: Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: canDelete ? Colors.white70 : Colors.white24,
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -793,10 +865,11 @@ class _CurveEditorState extends State<_CurveEditor> {
 }
 
 class _CurvePainter extends CustomPainter {
-  _CurvePainter(this.points, this.channel);
+  _CurvePainter(this.points, this.channel, {this.selectedPoint});
 
   final List<Offset> points;
   final CurveChannel channel;
+  final int? selectedPoint;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -848,13 +921,35 @@ class _CurvePainter extends CustomPainter {
     );
     canvas.restore();
 
-    for (final point in pixels) {
-      canvas.drawCircle(point, 6, Paint()..color = const Color(0xff17181c));
-      canvas.drawCircle(point, 3.5, Paint()..color = color);
+    for (var i = 0; i < pixels.length; i++) {
+      final point = pixels[i];
+      final selected = i == selectedPoint;
+      canvas.drawCircle(
+        point,
+        selected ? 8 : 6,
+        Paint()..color = const Color(0xff17181c),
+      );
+      canvas.drawCircle(
+        point,
+        selected ? 5 : 3.5,
+        Paint()..color = color,
+      );
+      if (selected) {
+        canvas.drawCircle(
+          point,
+          8,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5
+            ..color = Colors.white70,
+        );
+      }
     }
   }
 
   @override
   bool shouldRepaint(covariant _CurvePainter oldDelegate) =>
-      oldDelegate.points != points || oldDelegate.channel != channel;
+      oldDelegate.points != points ||
+      oldDelegate.channel != channel ||
+      oldDelegate.selectedPoint != selectedPoint;
 }
