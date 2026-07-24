@@ -1,0 +1,4 @@
+enum TrackType {
+  video,
+  audio,
+}
