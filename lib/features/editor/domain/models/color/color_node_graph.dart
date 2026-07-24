@@ -8,10 +8,10 @@ enum CurveChannel { y, r, g, b }
 class ColorCurveSettings {
   const ColorCurveSettings({
     this.channel = CurveChannel.y,
-    this.y = const [Offset(0, 0), Offset(1, 1)],
-    this.r = const [Offset(0, 0), Offset(1, 1)],
-    this.g = const [Offset(0, 0), Offset(1, 1)],
-    this.b = const [Offset(0, 0), Offset(1, 1)],
+    this.y = const [Offset(0, 0), Offset(.5, .5), Offset(1, 1)],
+    this.r = const [Offset(0, 0), Offset(.5, .5), Offset(1, 1)],
+    this.g = const [Offset(0, 0), Offset(.5, .5), Offset(1, 1)],
+    this.b = const [Offset(0, 0), Offset(.5, .5), Offset(1, 1)],
     this.lowSoft = 0,
     this.highSoft = 0,
     this.previewEnabled = true,
@@ -25,7 +25,7 @@ class ColorCurveSettings {
   ColorCurveSettings copyWith({CurveChannel? channel,List<Offset>? y,List<Offset>? r,List<Offset>? g,List<Offset>? b,double? lowSoft,double? highSoft,bool? previewEnabled})=>ColorCurveSettings(channel:channel??this.channel,y:y??this.y,r:r??this.r,g:g??this.g,b:b??this.b,lowSoft:lowSoft??this.lowSoft,highSoft:highSoft??this.highSoft,previewEnabled:previewEnabled??this.previewEnabled);
   Map<String,dynamic> toJson()=>{'channel':channel.name,'y':_encode(y),'r':_encode(r),'g':_encode(g),'b':_encode(b),'lowSoft':lowSoft,'highSoft':highSoft,'previewEnabled':previewEnabled};
   static List<List<double>> _encode(List<Offset> p)=>p.map((e)=>[e.dx,e.dy]).toList();
-  static List<Offset> _decode(dynamic v){final list=(v as List?)??const [];final out=list.whereType<List>().where((e)=>e.length>=2).map((e)=>Offset((e[0] as num).toDouble(),(e[1] as num).toDouble())).toList();return out.length>=2?out:const [Offset(0,0),Offset(1,1)];}
+  static List<Offset> _decode(dynamic v){final list=(v as List?)??const [];final out=list.whereType<List>().where((e)=>e.length>=2).map((e)=>Offset((e[0] as num).toDouble(),(e[1] as num).toDouble())).toList();if(out.length==2){final a=out.first,b=out.last;return [a,Offset((a.dx+b.dx)/2,(a.dy+b.dy)/2),b];}return out.length>=3?out:const [Offset(0,0),Offset(.5,.5),Offset(1,1)];}
   factory ColorCurveSettings.fromJson(Map<String,dynamic> j)=>ColorCurveSettings(channel:CurveChannel.values.firstWhere((e)=>e.name==(j['channel']??'y'),orElse:()=>CurveChannel.y),y:_decode(j['y']),r:_decode(j['r']),g:_decode(j['g']),b:_decode(j['b']),lowSoft:(j['lowSoft'] as num?)?.toDouble()??0,highSoft:(j['highSoft'] as num?)?.toDouble()??0,previewEnabled:j['previewEnabled'] as bool? ?? true);
 }
 
