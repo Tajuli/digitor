@@ -360,57 +360,17 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
     required double min,
     required double max,
     String? suffix,
-  }) async {
-    final controller = TextEditingController(text: value.toStringAsFixed(2));
-    String? error;
-    final result = await showDialog<double>(
+  }) {
+    return showDialog<double>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xff292b30),
-          title: Text('Set $title', style: const TextStyle(color: Colors.white)),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              labelText: 'Value${suffix == null ? '' : ' ($suffix)'}',
-              labelStyle: const TextStyle(color: Colors.white54),
-              errorText: error,
-              helperText: '${min.toStringAsFixed(2)} to ${max.toStringAsFixed(2)}',
-              helperStyle: const TextStyle(color: Colors.white38),
-              enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white70)),
-            ),
-            onSubmitted: (_) {
-              final parsed = double.tryParse(controller.text.trim());
-              if (parsed == null || parsed < min || parsed > max) {
-                setDialogState(() => error = 'Enter a value between $min and $max');
-              } else {
-                Navigator.of(dialogContext).pop(parsed);
-              }
-            },
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                final parsed = double.tryParse(controller.text.trim());
-                if (parsed == null || parsed < min || parsed > max) {
-                  setDialogState(() => error = 'Enter a value between $min and $max');
-                  return;
-                }
-                Navigator.of(dialogContext).pop(parsed);
-              },
-              child: const Text('Apply'),
-            ),
-          ],
-        ),
+      builder: (_) => _NumericInputDialog(
+        title: title,
+        value: value,
+        min: min,
+        max: max,
+        suffix: suffix,
       ),
     );
-    controller.dispose();
-    return result;
   }
 
   String _signed(double value) => '${value >= 0 ? '+' : ''}${value.toStringAsFixed(2)}';
@@ -492,6 +452,140 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
   void _qual(HslQualifierSettings q)=>_replace(node.copyWith(qualifier:q));
   Widget _gradientRange(String title,double lo,double hi,ValueChanged<RangeValues> f,List<Color> colors)=>Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title,style:const TextStyle(color:Colors.white70)),Container(height:16,margin:const EdgeInsets.only(top:6),decoration:BoxDecoration(borderRadius:BorderRadius.circular(8),gradient:LinearGradient(colors:colors))),RangeSlider(values:RangeValues(lo.clamp(0,1).toDouble(),hi.clamp(0,1).toDouble()),onChanged:f),Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[Text((lo*100).toStringAsFixed(0),style:const TextStyle(color:Colors.white54)),Text((hi*100).toStringAsFixed(0),style:const TextStyle(color:Colors.white54))]),const SizedBox(height:8)]);
   Widget _qSlider(String t,double v,ValueChanged<double> f)=>_wide(t,v,0,1,f);
+}
+
+
+class _NumericInputDialog extends StatefulWidget {
+  const _NumericInputDialog({
+    required this.title,
+    required this.value,
+    required this.min,
+    required this.max,
+    this.suffix,
+  });
+
+  final String title;
+  final double value;
+  final double min;
+  final double max;
+  final String? suffix;
+
+  @override
+  State<_NumericInputDialog> createState() => _NumericInputDialogState();
+}
+
+class _NumericInputDialogState extends State<_NumericInputDialog> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+  String? _error;
+  bool _submitted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.value.toStringAsFixed(2),
+    );
+    _focusNode = FocusNode();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+      _controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _controller.text.length,
+      );
+    });
+  }
+
+  double? _parseValue() {
+    final normalized = _controller.text.trim().replaceAll(',', '.');
+    return double.tryParse(normalized);
+  }
+
+  void _submit() {
+    if (_submitted) return;
+
+    final parsed = _parseValue();
+    if (parsed == null || parsed < widget.min || parsed > widget.max) {
+      setState(() {
+        _error =
+            'Enter a value between ${widget.min.toStringAsFixed(2)} and ${widget.max.toStringAsFixed(2)}';
+      });
+      return;
+    }
+
+    _submitted = true;
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop(parsed);
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xff292b30),
+      title: Text(
+        'Set ${widget.title}',
+        style: const TextStyle(color: Colors.white),
+      ),
+      content: TextField(
+        controller: _controller,
+        focusNode: _focusNode,
+        keyboardType: const TextInputType.numberWithOptions(
+          decimal: true,
+          signed: true,
+        ),
+        textInputAction: TextInputAction.done,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          labelText:
+              'Value${widget.suffix == null ? '' : ' (${widget.suffix})'}',
+          labelStyle: const TextStyle(color: Colors.white54),
+          errorText: _error,
+          helperText:
+              '${widget.min.toStringAsFixed(2)} to ${widget.max.toStringAsFixed(2)}',
+          helperStyle: const TextStyle(color: Colors.white38),
+          enabledBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Colors.white24),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Colors.white70),
+          ),
+          errorBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Colors.redAccent),
+          ),
+          focusedErrorBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Colors.redAccent),
+          ),
+        ),
+        onChanged: (_) {
+          if (_error == null) return;
+          setState(() => _error = null);
+        },
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
 }
 
 class _WheelPainter extends CustomPainter {
