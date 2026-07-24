@@ -74,10 +74,11 @@ class ColorGradeFilter extends StatelessWidget {
     // Curves: approximate each channel using its end-to-end slope and midpoint
     // bias. This makes every curve channel visibly affect live playback while
     // retaining GPU-backed ColorFiltered performance.
-    final yCurve = _linearize(node.curves.y);
-    final rCurve = _linearize(node.curves.r);
-    final gCurve = _linearize(node.curves.g);
-    final bCurve = _linearize(node.curves.b);
+    final curves = node.curves;
+    final yCurve = curves.previewEnabled ? _linearize(curves.y) : (1.0, 0.0);
+    final rCurve = curves.previewEnabled ? _linearize(curves.r) : (1.0, 0.0);
+    final gCurve = curves.previewEnabled ? _linearize(curves.g) : (1.0, 0.0);
+    final bCurve = curves.previewEnabled ? _linearize(curves.b) : (1.0, 0.0);
     rGain *= yCurve.$1 * rCurve.$1;
     gGain *= yCurve.$1 * gCurve.$1;
     bGain *= yCurve.$1 * bCurve.$1;
