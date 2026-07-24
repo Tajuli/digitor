@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:digitor/features/editor/domain/export/export_settings.dart';
 import 'package:digitor/features/editor/domain/models/clip_type.dart';
 import 'package:digitor/features/editor/domain/models/editor_project.dart';
+import 'package:digitor/features/editor/presentation/widgets/color_grade_filter.dart';
 import 'package:flutter/services.dart';
 
 
@@ -137,6 +138,7 @@ class MobileExportService {
               'sourceStartMs': clip.sourceStart.inMilliseconds,
               'sourceEndMs': clip.sourceStart.inMilliseconds + clip.duration.inMilliseconds,
               'removeAudio': !settings.includeAudio || clip.type == ClipType.image || clip.muted,
+              'colorMatrix': ColorGradeFilter.exportMatrix4x4(clip.colorNodeGraph),
             },
           )
           .toList(),
