@@ -160,7 +160,18 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
         ),
         SizedBox(
           width: 50,
-          child: Text(suffix ?? _signed(value), textAlign: TextAlign.right, style: const TextStyle(color: Colors.white70, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()])),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(5),
+            onTap: () => _editCorrectionValue(label, value, min, max, onChanged),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Text(
+                suffix ?? _signed(value),
+                textAlign: TextAlign.right,
+                style: const TextStyle(color: Colors.white70, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+              ),
+            ),
+          ),
         ),
         IconButton(
           tooltip: 'Reset $label',
@@ -232,10 +243,21 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
               ),
               SizedBox(
                 width: 42,
-                child: Text(
-                  _signed(value.luminance),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(color: Colors.white70, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(5),
+                  onTap: () => _editWheelComponent(
+                    '$label luminance',
+                    value.luminance,
+                    (v) => onChanged(value.copyWith(luminance: v)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    child: Text(
+                      _signed(value.luminance),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontFeatures: [FontFeature.tabularFigures()]),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -244,9 +266,33 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _numeric('X', value.chroma.dx),
-              _numeric('Y', value.chroma.dy),
-              _numeric('Lum', value.luminance),
+              _numeric(
+                'X',
+                value.chroma.dx,
+                onTap: () => _editWheelComponent(
+                  '$label X',
+                  value.chroma.dx,
+                  (v) => onChanged(value.copyWith(chroma: Offset(v, value.chroma.dy))),
+                ),
+              ),
+              _numeric(
+                'Y',
+                value.chroma.dy,
+                onTap: () => _editWheelComponent(
+                  '$label Y',
+                  value.chroma.dy,
+                  (v) => onChanged(value.copyWith(chroma: Offset(value.chroma.dx, v))),
+                ),
+              ),
+              _numeric(
+                'Lum',
+                value.luminance,
+                onTap: () => _editWheelComponent(
+                  '$label luminance',
+                  value.luminance,
+                  (v) => onChanged(value.copyWith(luminance: v)),
+                ),
+              ),
             ],
           ),
         ],
@@ -266,14 +312,106 @@ class _ColorGradingSheetState extends State<ColorGradingSheet> {
     onChanged(current.copyWith(chroma: Offset(normalized.dx, normalized.dy)));
   }
 
-  Widget _numeric(String label, double value) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-    decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(5)),
-    child: Text(
-      '$label ${_signed(value)}',
-      style: const TextStyle(color: Colors.white60, fontSize: 10, fontFeatures: [FontFeature.tabularFigures()]),
+  Widget _numeric(String label, double value, {VoidCallback? onTap}) => InkWell(
+    borderRadius: BorderRadius.circular(5),
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(5)),
+      child: Text(
+        '$label ${_signed(value)}',
+        style: const TextStyle(color: Colors.white60, fontSize: 10, fontFeatures: [FontFeature.tabularFigures()]),
+      ),
     ),
   );
+
+  Future<void> _editCorrectionValue(
+    String label,
+    double value,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+  ) async {
+    final isHue = label == 'Hue';
+    final shownValue = isHue ? value * 180 : value;
+    final result = await _showNumericInput(
+      title: label,
+      value: shownValue,
+      min: isHue ? -180 : min,
+      max: isHue ? 180 : max,
+      suffix: isHue ? '°' : null,
+    );
+    if (result == null) return;
+    onChanged(isHue ? result / 180 : result);
+  }
+
+  Future<void> _editWheelComponent(
+    String title,
+    double value,
+    ValueChanged<double> onChanged,
+  ) async {
+    final result = await _showNumericInput(title: title, value: value, min: -1, max: 1);
+    if (result != null) onChanged(result);
+  }
+
+  Future<double?> _showNumericInput({
+    required String title,
+    required double value,
+    required double min,
+    required double max,
+    String? suffix,
+  }) async {
+    final controller = TextEditingController(text: value.toStringAsFixed(2));
+    String? error;
+    final result = await showDialog<double>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xff292b30),
+          title: Text('Set $title', style: const TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Value${suffix == null ? '' : ' ($suffix)'}',
+              labelStyle: const TextStyle(color: Colors.white54),
+              errorText: error,
+              helperText: '${min.toStringAsFixed(2)} to ${max.toStringAsFixed(2)}',
+              helperStyle: const TextStyle(color: Colors.white38),
+              enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+              focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Colors.white70)),
+            ),
+            onSubmitted: (_) {
+              final parsed = double.tryParse(controller.text.trim());
+              if (parsed == null || parsed < min || parsed > max) {
+                setDialogState(() => error = 'Enter a value between $min and $max');
+              } else {
+                Navigator.of(dialogContext).pop(parsed);
+              }
+            },
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final parsed = double.tryParse(controller.text.trim());
+                if (parsed == null || parsed < min || parsed > max) {
+                  setDialogState(() => error = 'Enter a value between $min and $max');
+                  return;
+                }
+                Navigator.of(dialogContext).pop(parsed);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
 
   String _signed(double value) => '${value >= 0 ? '+' : ''}${value.toStringAsFixed(2)}';
 
