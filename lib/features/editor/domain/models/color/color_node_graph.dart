@@ -14,17 +14,19 @@ class ColorCurveSettings {
     this.b = const [Offset(0, 0), Offset(1, 1)],
     this.lowSoft = 0,
     this.highSoft = 0,
+    this.previewEnabled = true,
   });
   final CurveChannel channel;
   final List<Offset> y, r, g, b;
   final double lowSoft, highSoft;
+  final bool previewEnabled;
   List<Offset> pointsFor(CurveChannel c) => switch(c){CurveChannel.y=>y,CurveChannel.r=>r,CurveChannel.g=>g,CurveChannel.b=>b};
   ColorCurveSettings withPoints(CurveChannel c,List<Offset> points)=>copyWith(y:c==CurveChannel.y?points:null,r:c==CurveChannel.r?points:null,g:c==CurveChannel.g?points:null,b:c==CurveChannel.b?points:null);
-  ColorCurveSettings copyWith({CurveChannel? channel,List<Offset>? y,List<Offset>? r,List<Offset>? g,List<Offset>? b,double? lowSoft,double? highSoft})=>ColorCurveSettings(channel:channel??this.channel,y:y??this.y,r:r??this.r,g:g??this.g,b:b??this.b,lowSoft:lowSoft??this.lowSoft,highSoft:highSoft??this.highSoft);
-  Map<String,dynamic> toJson()=>{'channel':channel.name,'y':_encode(y),'r':_encode(r),'g':_encode(g),'b':_encode(b),'lowSoft':lowSoft,'highSoft':highSoft};
+  ColorCurveSettings copyWith({CurveChannel? channel,List<Offset>? y,List<Offset>? r,List<Offset>? g,List<Offset>? b,double? lowSoft,double? highSoft,bool? previewEnabled})=>ColorCurveSettings(channel:channel??this.channel,y:y??this.y,r:r??this.r,g:g??this.g,b:b??this.b,lowSoft:lowSoft??this.lowSoft,highSoft:highSoft??this.highSoft,previewEnabled:previewEnabled??this.previewEnabled);
+  Map<String,dynamic> toJson()=>{'channel':channel.name,'y':_encode(y),'r':_encode(r),'g':_encode(g),'b':_encode(b),'lowSoft':lowSoft,'highSoft':highSoft,'previewEnabled':previewEnabled};
   static List<List<double>> _encode(List<Offset> p)=>p.map((e)=>[e.dx,e.dy]).toList();
   static List<Offset> _decode(dynamic v){final list=(v as List?)??const [];final out=list.whereType<List>().where((e)=>e.length>=2).map((e)=>Offset((e[0] as num).toDouble(),(e[1] as num).toDouble())).toList();return out.length>=2?out:const [Offset(0,0),Offset(1,1)];}
-  factory ColorCurveSettings.fromJson(Map<String,dynamic> j)=>ColorCurveSettings(channel:CurveChannel.values.firstWhere((e)=>e.name==(j['channel']??'y'),orElse:()=>CurveChannel.y),y:_decode(j['y']),r:_decode(j['r']),g:_decode(j['g']),b:_decode(j['b']),lowSoft:(j['lowSoft'] as num?)?.toDouble()??0,highSoft:(j['highSoft'] as num?)?.toDouble()??0);
+  factory ColorCurveSettings.fromJson(Map<String,dynamic> j)=>ColorCurveSettings(channel:CurveChannel.values.firstWhere((e)=>e.name==(j['channel']??'y'),orElse:()=>CurveChannel.y),y:_decode(j['y']),r:_decode(j['r']),g:_decode(j['g']),b:_decode(j['b']),lowSoft:(j['lowSoft'] as num?)?.toDouble()??0,highSoft:(j['highSoft'] as num?)?.toDouble()??0,previewEnabled:j['previewEnabled'] as bool? ?? true);
 }
 
 class HslQualifierSettings {
