@@ -782,12 +782,6 @@ class _CurveEditorState extends State<_CurveEditor> {
             final next = [...points, position]..sort((a, b) => a.dx.compareTo(b.dx));
             widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
           },
-          onLongPressStart: (details) {
-            final index = _nearestPoint(points, details.localPosition, size);
-            if (index == null || index == 0 || index == points.length - 1) return;
-            final next = [...points]..removeAt(index);
-            widget.onChanged(widget.settings.withPoints(widget.settings.channel, next));
-          },
           child: CustomPaint(
             size: Size.infinite,
             painter: _CurvePainter(points, widget.settings.channel),
