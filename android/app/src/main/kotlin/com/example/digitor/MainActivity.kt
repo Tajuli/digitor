@@ -7,7 +7,6 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.os.Build
 import android.view.Display
-import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
@@ -66,20 +65,45 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun isHardwareEncoder(codec: MediaCodecInfo): Boolean {
+        if (!codec.isEncoder) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return codec.isHardwareAccelerated && !codec.isSoftwareOnly
+        }
+
+        val name = codec.name.lowercase()
+        val softwareMarkers = listOf(
+            "omx.google.",
+            "c2.android.",
+            "c2.google.",
+            ".sw.",
+            "software",
+            "ffmpeg",
+        )
+        return softwareMarkers.none { name.contains(it) }
+    }
+
+    private fun findHardwareEncoder(mimeType: String): MediaCodecInfo? {
+        return MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { codec ->
+            isHardwareEncoder(codec) && codec.supportedTypes.any { it.equals(mimeType, ignoreCase = true) }
+        }
+    }
 
     private fun getExportCapabilities(): Map<String, Any> {
-        val codecs = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
+        val codecs = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.filter(::isHardwareEncoder)
         var h264Encoder = false
         var hevcEncoder = false
         var hevc10BitEncoder = false
         var dolbyVisionEncoder = false
         var supports4k60 = false
+        val hardwareEncoderNames = mutableSetOf<String>()
 
-        codecs.filter { it.isEncoder }.forEach { codec ->
+        codecs.forEach { codec ->
             codec.supportedTypes.forEach { type ->
                 when (type.lowercase()) {
                     MimeTypes.VIDEO_H264 -> {
                         h264Encoder = true
+                        hardwareEncoderNames.add(codec.name)
                         runCatching {
                             val caps = codec.getCapabilitiesForType(type).videoCapabilities
                             if (caps != null && caps.areSizeAndRateSupported(3840, 2160, 60.0)) {
@@ -89,10 +113,10 @@ class MainActivity : FlutterActivity() {
                     }
                     MimeTypes.VIDEO_H265 -> {
                         hevcEncoder = true
+                        hardwareEncoderNames.add(codec.name)
                         runCatching {
                             val capabilities = codec.getCapabilitiesForType(type)
-                            val profileLevels = capabilities.profileLevels
-                            hevc10BitEncoder = hevc10BitEncoder || profileLevels.any {
+                            hevc10BitEncoder = hevc10BitEncoder || capabilities.profileLevels.any {
                                 it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
                                     it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
                                     it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
@@ -103,7 +127,10 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
-                    "video/dolby-vision" -> dolbyVisionEncoder = true
+                    "video/dolby-vision" -> {
+                        dolbyVisionEncoder = true
+                        hardwareEncoderNames.add(codec.name)
+                    }
                 }
             }
         }
@@ -134,6 +161,8 @@ class MainActivity : FlutterActivity() {
             "displayHdr10" to displayHdr10,
             "displayDolbyVision" to displayDolbyVision,
             "displayHlg" to displayHlg,
+            "hardwareOnly" to true,
+            "hardwareEncoderNames" to hardwareEncoderNames.sorted(),
             "sdkInt" to Build.VERSION.SDK_INT,
             "manufacturer" to Build.MANUFACTURER,
             "model" to Build.MODEL,
@@ -202,6 +231,17 @@ class MainActivity : FlutterActivity() {
             val frameRate = call.argument<Int>("frameRate") ?: 30
             val bitrate = call.argument<Int>("videoBitrate") ?: 8_000_000
             val codec = call.argument<String>("videoCodec") ?: "h264"
+            val requestedMimeType = if (codec == "h265") MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264
+            val hardwareEncoder = findHardwareEncoder(requestedMimeType)
+                ?: run {
+                    result.error(
+                        "hardware_encoder_unavailable",
+                        "No hardware ${if (codec == "h265") "HEVC" else "H.264"} encoder is available. CPU/software fallback is disabled.",
+                        null,
+                    )
+                    cleanupExport()
+                    return
+                }
 
             val items = clips.map { clip ->
                 createEditedMediaItem(clip, width, height, frameRate)
@@ -212,7 +252,7 @@ class MainActivity : FlutterActivity() {
             temporaryOutput = temp
 
             val encoderFactory = DefaultEncoderFactory.Builder(this)
-                .setEnableFallback(true)
+                .setEnableFallback(false)
                 .setRequestedVideoEncoderSettings(
                     VideoEncoderSettings.Builder().setBitrate(bitrate).build(),
                 )
@@ -220,7 +260,7 @@ class MainActivity : FlutterActivity() {
 
             transformer = Transformer.Builder(this)
                 .setEncoderFactory(encoderFactory)
-                .setVideoMimeType(if (codec == "h265") MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264)
+                .setVideoMimeType(requestedMimeType)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResultValue: ExportResult) {
@@ -239,7 +279,11 @@ class MainActivity : FlutterActivity() {
                         exportResultValue: ExportResult,
                         exportException: ExportException,
                     ) {
-                        exportResult?.error("export_failed", exportException.message, exportException.errorCode)
+                        exportResult?.error(
+                            "gpu_export_failed",
+                            "Hardware encoder ${hardwareEncoder.name} failed; CPU/software fallback is disabled. ${exportException.message.orEmpty()}",
+                            exportException.errorCode,
+                        )
                         cleanupExport()
                     }
                 })
