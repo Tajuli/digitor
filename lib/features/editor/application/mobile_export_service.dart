@@ -6,7 +6,6 @@ import 'package:digitor/features/editor/domain/models/editor_project.dart';
 import 'package:digitor/features/editor/presentation/widgets/color_grade_filter.dart';
 import 'package:flutter/services.dart';
 
-
 class MobileExportCapabilities {
   const MobileExportCapabilities({
     required this.h264Encoder,
@@ -17,6 +16,8 @@ class MobileExportCapabilities {
     required this.displayHdr10,
     required this.displayDolbyVision,
     required this.displayHlg,
+    required this.hardwareOnly,
+    required this.hardwareEncoderNames,
     required this.sdkInt,
     required this.manufacturer,
     required this.model,
@@ -30,12 +31,15 @@ class MobileExportCapabilities {
   final bool displayHdr10;
   final bool displayDolbyVision;
   final bool displayHlg;
+  final bool hardwareOnly;
+  final List<String> hardwareEncoderNames;
   final int sdkInt;
   final String manufacturer;
   final String model;
 
   bool get canExportHdr10 => hevcEncoder && hevc10BitEncoder;
   bool get canExportDolbyVision => dolbyVisionEncoder;
+  bool get hasHardwareVideoEncoder => h264Encoder || hevcEncoder;
 
   factory MobileExportCapabilities.fromMap(Map<String, dynamic> map) {
     return MobileExportCapabilities(
@@ -47,6 +51,11 @@ class MobileExportCapabilities {
       displayHdr10: map['displayHdr10'] == true,
       displayDolbyVision: map['displayDolbyVision'] == true,
       displayHlg: map['displayHlg'] == true,
+      hardwareOnly: map['hardwareOnly'] == true,
+      hardwareEncoderNames: (map['hardwareEncoderNames'] as List<dynamic>?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[],
       sdkInt: (map['sdkInt'] as num?)?.toInt() ?? 0,
       manufacturer: map['manufacturer'] as String? ?? 'Unknown',
       model: map['model'] as String? ?? 'Unknown',
@@ -73,12 +82,13 @@ class MobileExportProgress {
 class MobileExportService {
   static const MethodChannel _channel = MethodChannel('digitor/mobile_export');
 
-
   Future<MobileExportCapabilities> capabilities() async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'getExportCapabilities',
     );
-    return MobileExportCapabilities.fromMap(result ?? const <String, dynamic>{});
+    return MobileExportCapabilities.fromMap(
+      result ?? const <String, dynamic>{},
+    );
   }
 
   Future<ExportLocation?> chooseLocation(String suggestedFileName) async {
@@ -99,6 +109,24 @@ class MobileExportService {
     required EditorProject project,
     required ExportSettings settings,
   }) async {
+    final capabilities = await this.capabilities();
+    if (!capabilities.hardwareOnly || !capabilities.hasHardwareVideoEncoder) {
+      throw StateError(
+        'No verified hardware video encoder is available. '
+        'Digitor does not silently fall back to CPU/software export.',
+      );
+    }
+    if (settings.videoCodec.name == 'h265' && !capabilities.hevcEncoder) {
+      throw StateError(
+        'A hardware HEVC encoder is not available. Choose H.264 or use a compatible device.',
+      );
+    }
+    if (settings.videoCodec.name != 'h265' && !capabilities.h264Encoder) {
+      throw StateError(
+        'A hardware H.264 encoder is not available on this device.',
+      );
+    }
+
     final visualClips = project.tracks
         .where((track) => !track.hidden)
         .expand((track) => track.clips)
@@ -136,9 +164,12 @@ class MobileExportService {
               'type': clip.type.name,
               'durationMs': clip.duration.inMilliseconds,
               'sourceStartMs': clip.sourceStart.inMilliseconds,
-              'sourceEndMs': clip.sourceStart.inMilliseconds + clip.duration.inMilliseconds,
-              'removeAudio': !settings.includeAudio || clip.type == ClipType.image || clip.muted,
-              'colorMatrix': ColorGradeFilter.exportMatrix4x4(clip.colorNodeGraph),
+              'sourceEndMs':
+                  clip.sourceStart.inMilliseconds + clip.duration.inMilliseconds,
+              'removeAudio':
+                  !settings.includeAudio || clip.type == ClipType.image || clip.muted,
+              'colorMatrix':
+                  ColorGradeFilter.exportMatrix4x4(clip.colorNodeGraph),
             },
           )
           .toList(),
@@ -147,7 +178,8 @@ class MobileExportService {
   }
 
   Future<MobileExportProgress> progress() async {
-    final result = await _channel.invokeMapMethod<String, dynamic>('getProgress');
+    final result =
+        await _channel.invokeMapMethod<String, dynamic>('getProgress');
     return MobileExportProgress(
       state: (result?['state'] as String?) ?? 'idle',
       percent: (result?['percent'] as int?) ?? 0,
