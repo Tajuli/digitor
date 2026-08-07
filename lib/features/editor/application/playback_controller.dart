@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:digitor/core/engine/digitor_engine_runtime.dart';
 import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
@@ -39,6 +40,9 @@ class PlaybackController extends ChangeNotifier {
     await old?.dispose();
     if (_disposed || _sourcePath != path) return;
 
+    // video_player remains the compatibility presenter until the platform
+    // NativeFlutterPresenter is attached. Transport state itself is mirrored
+    // into DigitorEngine by play/pause/seek below.
     final next = VideoPlayerController.file(
       File(path),
       videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
@@ -80,9 +84,6 @@ class PlaybackController extends ChangeNotifier {
     _position = value.position;
     _duration = value.duration;
 
-    // VideoPlayer renders its texture natively. Rebuilding the Flutter controls
-    // for every decoder callback only steals UI/GPU time, so update labels and
-    // controls at 5 fps while playback is active.
     final now = DateTime.now();
     if (!_transportPlaying ||
         now.difference(_lastUiNotification) >= const Duration(milliseconds: 200) ||
@@ -96,6 +97,7 @@ class PlaybackController extends ChangeNotifier {
   Future<void> play() async {
     if (_transportPlaying) return;
     _transportPlaying = true;
+    DigitorEngineRuntime.instance.play();
     if (isInitialized) await _video!.play();
     notifyListeners();
   }
@@ -103,6 +105,7 @@ class PlaybackController extends ChangeNotifier {
   Future<void> pause() async {
     if (!_transportPlaying && !(_video?.value.isPlaying ?? false)) return;
     _transportPlaying = false;
+    DigitorEngineRuntime.instance.pause();
     if (isInitialized) await _video!.pause();
     final value = _video?.value;
     if (value != null) _position = value.position;
@@ -112,13 +115,15 @@ class PlaybackController extends ChangeNotifier {
   Future<void> toggle() => isPlaying ? pause() : play();
 
   Future<void> seek(Duration position) async {
-    if (!isInitialized) return;
-    final target = position < Duration.zero
-        ? Duration.zero
-        : position > _duration
-            ? _duration
-            : position;
-    await _video!.seekTo(target);
+    final target = _duration <= Duration.zero
+        ? (position < Duration.zero ? Duration.zero : position)
+        : position < Duration.zero
+            ? Duration.zero
+            : position > _duration
+                ? _duration
+                : position;
+    DigitorEngineRuntime.instance.seek(target);
+    if (isInitialized) await _video!.seekTo(target);
     _position = target;
     notifyListeners();
   }
