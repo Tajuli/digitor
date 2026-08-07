@@ -1,9 +1,12 @@
+import 'package:digitor/core/engine/digitor_engine_runtime.dart';
 import 'package:digitor/features/editor/domain/models/color/color_node_graph.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class ColorNodeController extends ChangeNotifier {
-  ColorNodeController(this._graph);
+  ColorNodeController(this._graph) {
+    DigitorEngineRuntime.instance.syncColorGraph(_graph);
+  }
 
   ColorNodeGraph _graph;
   ColorNodeGraph get graph => _graph;
@@ -21,7 +24,7 @@ class ColorNodeController extends ChangeNotifier {
     final node = _graph.nodeById(id);
     if (node == null || !node.supportsProcessing) return;
     _graph = _graph.copyWith(selectedNodeId: id);
-    notifyListeners();
+    _notifyEngineAndUi();
   }
 
   void move(String id, Offset position) {
@@ -84,7 +87,7 @@ class ColorNodeController extends ChangeNotifier {
       connections: links,
       selectedNodeId: id,
     );
-    notifyListeners();
+    _notifyEngineAndUi();
   }
 
   void addParallelFrom(String anchorId) {
@@ -129,7 +132,7 @@ class ColorNodeController extends ChangeNotifier {
         ],
         selectedNodeId: branchId,
       );
-      notifyListeners();
+      _notifyEngineAndUi();
       return;
     }
 
@@ -168,7 +171,7 @@ class ColorNodeController extends ChangeNotifier {
       ],
       selectedNodeId: branchId,
     );
-    notifyListeners();
+    _notifyEngineAndUi();
   }
 
   void deleteSelected() {
@@ -193,7 +196,6 @@ class ColorNodeController extends ChangeNotifier {
         .toList();
 
     if (node.type == ColorNodeType.serial) {
-      // Rebuild every valid upstream -> downstream route.
       for (final input in incoming) {
         for (final output in outgoing) {
           if (input.from != output.to) {
@@ -204,12 +206,7 @@ class ColorNodeController extends ChangeNotifier {
     }
 
     if (node.type == ColorNodeType.parallel) {
-      // Remember the source feeding the deleted branch. It is needed when
-      // this was the final input of a Parallel Mixer.
       final deletedBranchSources = incoming.map((item) => item.from).toSet();
-
-      // A parallel node normally feeds one mixer, but process every outgoing
-      // mixer defensively so malformed/older saved graphs are repaired too.
       final affectedMixerIds = outgoing
           .map((item) => item.to)
           .where((mixerId) {
@@ -230,8 +227,6 @@ class ColorNodeController extends ChangeNotifier {
       }
     }
 
-    // Normalize any orphan/single-input mixer left by old projects or by a
-    // chain of deletes. Repeat because collapsing one mixer can expose another.
     var changed = true;
     while (changed) {
       changed = false;
@@ -269,7 +264,7 @@ class ColorNodeController extends ChangeNotifier {
       connections: rebuiltConnections,
       selectedNodeId: _graph.defaultNodeId,
     );
-    notifyListeners();
+    _notifyEngineAndUi();
   }
 
   _MixerCollapseResult _collapseMixerIfPossible({
@@ -290,7 +285,6 @@ class ColorNodeController extends ChangeNotifier {
         .where((connection) => connection.from == mixerId)
         .toList();
 
-    // Two or more active branches still need the mixer.
     if (inputs.length >= 2) {
       return _MixerCollapseResult(nodes, connections);
     }
@@ -307,9 +301,6 @@ class ColorNodeController extends ChangeNotifier {
         ? inputs.map((item) => item.from).toSet()
         : fallbackSources;
 
-    // When only one parallel branch remains, the parallel group no longer
-    // exists. Promote that remaining processing node to a true serial node so
-    // all later add/delete/select and grading behavior matches a serial node.
     if (inputs.length == 1) {
       final remainingId = inputs.single.from;
       nextNodes = nextNodes.map((item) {
@@ -323,9 +314,6 @@ class ColorNodeController extends ChangeNotifier {
       }).toList();
     }
 
-    // One remaining branch: promoted serial node -> every former mixer
-    // downstream node. No remaining branch: the deleted branch's upstream
-    // source bypasses the mixer.
     for (final sourceId in sourceIds) {
       for (final output in outputs) {
         if (sourceId != output.to) {
@@ -337,7 +325,6 @@ class ColorNodeController extends ChangeNotifier {
     nextConnections = _deduplicate(nextConnections);
     return _MixerCollapseResult(nextNodes, nextConnections);
   }
-
 
   String _serialNameFromParallel(String currentName) {
     final match = RegExp(r'(\d+)$').firstMatch(currentName.trim());
@@ -385,6 +372,11 @@ class ColorNodeController extends ChangeNotifier {
           .map((current) => current.id == node.id ? node : current)
           .toList(),
     );
+    _notifyEngineAndUi();
+  }
+
+  void _notifyEngineAndUi() {
+    DigitorEngineRuntime.instance.syncColorGraph(_graph);
     notifyListeners();
   }
 
