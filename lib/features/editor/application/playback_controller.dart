@@ -54,8 +54,16 @@ class PlaybackController extends ChangeNotifier {
       await next.initialize();
       if (_disposed || _video != next) return;
       _duration = next.value.duration;
+      DigitorEngineRuntime.instance.publishTimeline(
+        duration: _duration,
+        videoTrackCount: 1,
+        audioTrackCount: 1,
+      );
       await next.setVolume(0);
-      if (_transportPlaying) await next.play();
+      if (_transportPlaying) {
+        DigitorEngineRuntime.instance.play();
+        await next.play();
+      }
       notifyListeners();
     } catch (_) {
       if (!_disposed && _video == next) {
