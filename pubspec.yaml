@@ -9,6 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # DigitorEngine is intentionally consumed from the developer's private
+  # sibling checkout. Engine source is not vendored into this repository.
+  digitor_engine_ffi:
+    path: ../DigitorEngine/dart/digitor_engine_ffi
   cupertino_icons: ^1.0.8
   image_picker: ^1.1.2
   file_picker: ^10.3.3
