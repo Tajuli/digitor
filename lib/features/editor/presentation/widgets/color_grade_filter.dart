@@ -1,14 +1,14 @@
 import 'dart:math' as math;
 
+import 'package:digitor/core/engine/digitor_engine_runtime.dart';
 import 'package:digitor/features/editor/domain/models/color/color_node_graph.dart';
 import 'package:flutter/material.dart';
 
-/// Lightweight real-time preview renderer for the node graph.
+/// Compatibility Flutter preview for the active color graph.
 ///
-/// Flutter's stock video widget does not expose the decoded texture for custom
-/// per-pixel CPU work. This renderer therefore composes a high quality 4x5
-/// colour matrix from wheel/primary controls and a linearized approximation of
-/// the selected RGB/Y curves. It is fast enough to update while dragging.
+/// The graph is also synchronized into DigitorEngine before this compatibility
+/// matrix is built. The matrix remains only a presenter approximation until a
+/// platform NativeFlutterPresenter supplies the processed native GPU texture.
 class ColorGradeFilter extends StatelessWidget {
   const ColorGradeFilter({super.key, required this.graph, required this.child});
 
@@ -17,6 +17,7 @@ class ColorGradeFilter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    DigitorEngineRuntime.instance.syncColorGraph(graph);
     final matrix = _matrixForGraph(graph);
     return ColorFiltered(
       colorFilter: ColorFilter.matrix(matrix),
@@ -24,9 +25,8 @@ class ColorGradeFilter extends StatelessWidget {
     );
   }
 
-  /// Returns the same grade used by the Flutter preview as a normalized
-  /// column-major 4x4 matrix for Android Media3 export. The fourth column
-  /// carries the RGB bias because video pixels have alpha = 1.
+  /// Returns the same grade used by the Flutter compatibility preview as a
+  /// normalized column-major 4x4 matrix for the existing Media3 export path.
   static List<double> exportMatrix4x4(ColorNodeGraph graph) {
     final m = _matrixForGraph(graph);
     return <double>[
@@ -50,30 +50,23 @@ class ColorGradeFilter extends StatelessWidget {
     final g = node.grade;
     final wheels = node.wheels;
 
-    // Primaries / wheels.
     final exposure = math.pow(2.0, g.exposure * 1.6).toDouble();
     final contrast = 1.0 + g.contrast * 1.15;
     final saturation = math.max(0.0, 1.0 + g.saturation * 1.35);
     final colorBoost = math.max(0.0, 1.0 + g.colorBoost * .85);
 
-    // Temperature and tint are represented as opposing channel gains.
     final warm = g.temperature * .24;
     final tint = g.tint * .18;
     var rGain = exposure * (1 + warm + tint * .25);
     var gGain = exposure * (1 - tint);
     var bGain = exposure * (1 - warm + tint * .25);
 
-    // Lift/shadows and gain/highlights. Values are deliberately bounded to
-    // prevent a dragged control from instantly clipping the preview.
     final lift = g.shadows * 46.0;
     final gain = 1.0 + g.highlights * .55;
     rGain *= gain;
     gGain *= gain;
     bGain *= gain;
 
-    // Curves: approximate each channel using its end-to-end slope and midpoint
-    // bias. This makes every curve channel visibly affect live playback while
-    // retaining GPU-backed ColorFiltered performance.
     final curves = node.curves;
     final yCurve = curves.previewEnabled ? _linearize(curves.y) : (1.0, 0.0);
     final rCurve = curves.previewEnabled ? _linearize(curves.r) : (1.0, 0.0);
@@ -93,14 +86,10 @@ class ColorGradeFilter extends StatelessWidget {
       0, 0, 0, 1, 0,
     ];
 
-    // Lift/Gamma/Gain/Offset wheels. A 4x5 colour matrix cannot isolate
-    // tonal ranges as precisely as a shader, but these weighted channel
-    // gains and biases provide responsive, persistent live preview.
     if (wheels.previewEnabled) {
       base = _multiply(_wheelMatrix(wheels), base);
     }
 
-    // Contrast around middle grey.
     final contrastBias = 128.0 * (1.0 - contrast);
     base = _multiply(<double>[
       contrast, 0, 0, 0, contrastBias,
@@ -109,7 +98,6 @@ class ColorGradeFilter extends StatelessWidget {
       0, 0, 0, 1, 0,
     ], base);
 
-    // Standard luminance-preserving saturation matrix.
     const lr = .2126, lg = .7152, lb = .0722;
     final inv = 1 - saturation;
     base = _multiply(<double>[
@@ -119,7 +107,6 @@ class ColorGradeFilter extends StatelessWidget {
       0, 0, 0, 1, 0,
     ], base);
 
-    // Color Boost is a gentler vibrance-style saturation pass.
     final boostInv = 1 - colorBoost;
     base = _multiply(<double>[
       boostInv * lr + colorBoost, boostInv * lg, boostInv * lb, 0, 0,
@@ -128,7 +115,6 @@ class ColorGradeFilter extends StatelessWidget {
       0, 0, 0, 1, 0,
     ], base);
 
-    // Hue rotation around the luminance axis. Range -1...1 maps to -180...180 degrees.
     if (g.hue.abs() > .0001) {
       final angle = g.hue * math.pi;
       final c = math.cos(angle);
@@ -141,10 +127,6 @@ class ColorGradeFilter extends StatelessWidget {
       ], base);
     }
 
-    // Qualifier preview: when enabled, strengthen the selected hue family and
-    // reduce unselected colour energy. It is an intentionally fast preview
-    // approximation; export/native renderers can later use the persisted HSL
-    // ranges for a true matte.
     final q = node.qualifier;
     if (q.enabled) {
       final hue = q.hueCenter - q.hueCenter.floorToDouble();
@@ -166,12 +148,7 @@ class ColorGradeFilter extends StatelessWidget {
     return base;
   }
 
-
   static List<double> _wheelMatrix(ColorWheelSettings wheels) {
-    // Stronger Resolve-style primaries. Lift primarily changes the black point,
-    // gamma reshapes the middle range, gain controls highlights, and offset
-    // moves the whole signal. The matrix path is still real-time and is also
-    // shared with export, so preview and rendered output remain consistent.
     final lift = _wheelRgb(wheels.lift, chromaStrength: .34, luminanceStrength: 58);
     final gamma = _wheelRgb(wheels.gamma, chromaStrength: .32, luminanceStrength: .48);
     final gain = _wheelRgb(wheels.gain, chromaStrength: .44, luminanceStrength: .78);
@@ -203,8 +180,6 @@ class ColorGradeFilter extends StatelessWidget {
     final x = control.chroma.dx.clamp(-1.0, 1.0).toDouble();
     final y = control.chroma.dy.clamp(-1.0, 1.0).toDouble();
 
-    // Horizontal axis runs green/cyan <-> magenta/red. Vertical axis runs
-    // yellow/green <-> blue. The conversion is neutral at the centre.
     final red = (x * .86 - y * .28) * chromaStrength;
     final green = (-x * .45 - y * .45) * chromaStrength;
     final blue = (-x * .41 + y * .73) * chromaStrength;
