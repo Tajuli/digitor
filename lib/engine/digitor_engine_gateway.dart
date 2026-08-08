@@ -15,6 +15,7 @@ class DigitorEngineGateway extends ChangeNotifier {
   DigitorFlutterHostCapabilities? _hostCapabilities;
   DigitorProductionDecoderInfo? _decoder;
   DigitorProductionDecodedFrameInfo? _firstFrame;
+  DigitorProductionNativeSurface? _nativeSurface;
 
   bool _initializing = false;
   bool _ready = false;
@@ -31,6 +32,7 @@ class DigitorEngineGateway extends ChangeNotifier {
   DigitorFlutterHostCapabilities? get hostCapabilities => _hostCapabilities;
   DigitorProductionDecoderInfo? get decoder => _decoder;
   DigitorProductionDecodedFrameInfo? get firstFrame => _firstFrame;
+  DigitorProductionNativeSurface? get nativeSurface => _nativeSurface;
 
   DigitorNodeGraph get graph {
     final value = _graph;
@@ -65,8 +67,24 @@ class DigitorEngineGateway extends ChangeNotifier {
     final size = frame == null ? '' : ' • ${frame.width}×${frame.height}';
     final implementation =
         decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
-    return '${_basename(path)}$size$implementation';
+    final residency = frame == null
+        ? ''
+        : frame.gpuResident
+            ? ' • GPU resident'
+            : frame.cpuResident
+                ? ' • CPU resident'
+                : '';
+    return '${_basename(path)}$size$implementation$residency';
   }
+
+  String get nativeSurfaceLabel {
+    final value = _nativeSurface;
+    if (value == null) return 'No native decoder surface';
+    return '${value.platform.name} • ${value.handleType.name} • '
+        '${value.pixelFormat.name} • ${value.width}×${value.height}';
+  }
+
+  String get recipeIdentity => _graph?.recipeIdentity ?? '';
 
   Future<void> initialize() async {
     if (_ready || _initializing) return;
@@ -124,10 +142,25 @@ class DigitorEngineGateway extends ChangeNotifier {
       _mediaPath = path;
       _decoder = _media!.decoderInfo;
       _firstFrame = _media!.decode(0);
+      _nativeSurface = null;
+      if (_firstFrame!.gpuResident && _decoder!.nativeSurfaceOutput) {
+        try {
+          _nativeSurface = _media!.nativeSurface;
+        } catch (_) {
+          _nativeSurface = null;
+        }
+      }
     } catch (error) {
       _error = error.toString();
     }
     notifyListeners();
+  }
+
+  void selectNode(int node) {
+    _mutate(() {
+      graph.select(node);
+      _selectedNode = node;
+    });
   }
 
   void addSerialNode() {
@@ -148,17 +181,54 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
+  void convertSelectedToParallel() {
+    _mutate(() {
+      _selectCurrent();
+      graph.convertToParallel(_selectedNode!);
+    });
+  }
+
+  void connectNodes(int source, int destination) {
+    _mutate(() => graph.connect(source, destination));
+  }
+
+  void disconnectNodes(int source, int destination) {
+    _mutate(() => graph.disconnect(source, destination));
+  }
+
+  void moveSelectedNode(double x, double y) {
+    _mutate(() {
+      _selectCurrent();
+      graph.setPosition(_selectedNode!, x, y);
+    });
+  }
+
+  void setSelectedEnabled(bool enabled) {
+    _mutate(() {
+      _selectCurrent();
+      graph.setEnabled(_selectedNode!, enabled);
+    });
+  }
+
+  void setSelectedBypassed(bool bypassed) {
+    _mutate(() {
+      _selectCurrent();
+      graph.setBypassed(_selectedNode!, bypassed);
+    });
+  }
+
   void removeSelectedNode() {
     _mutate(() {
       final selected = _selectedNode;
       if (selected == null) return;
       graph.remove(selected);
-      final replacement = graph.addSerialAfter(
-        graph.endpoints.input,
-        name: 'Grade',
-      );
-      _selectedNode = replacement;
-      graph.select(replacement);
+      final endpoints = graph.endpoints;
+      final nativeSelection = graph.selectedNode;
+      if (nativeSelection == endpoints.input || nativeSelection == endpoints.output) {
+        _selectedNode = null;
+      } else {
+        _selectedNode = nativeSelection;
+      }
     });
   }
 
@@ -203,15 +273,19 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double gamma,
     required double gain,
     required double offset,
+    DigitorRgb liftRgb = const DigitorRgb.neutral(),
+    DigitorRgb gammaRgb = const DigitorRgb.neutral(),
+    DigitorRgb gainRgb = const DigitorRgb.neutral(),
+    DigitorRgb offsetRgb = const DigitorRgb.neutral(),
   }) {
     _mutate(() {
       _selectCurrent();
       graph.addPrimaryWheels(
         DigitorPrimaryWheels(
-          lift: DigitorPrimaryWheel(master: lift),
-          gamma: DigitorPrimaryWheel(master: gamma),
-          gain: DigitorPrimaryWheel(master: gain),
-          offset: DigitorPrimaryWheel(master: offset),
+          lift: DigitorPrimaryWheel(master: lift, rgb: liftRgb),
+          gamma: DigitorPrimaryWheel(master: gamma, rgb: gammaRgb),
+          gain: DigitorPrimaryWheel(master: gain, rgb: gainRgb),
+          offset: DigitorPrimaryWheel(master: offset, rgb: offsetRgb),
         ),
       );
     });
@@ -222,39 +296,83 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double midtones,
     required double highlights,
     required double global,
+    DigitorRgb shadowsRgb = const DigitorRgb.neutral(),
+    DigitorRgb midtonesRgb = const DigitorRgb.neutral(),
+    DigitorRgb highlightsRgb = const DigitorRgb.neutral(),
+    DigitorRgb globalRgb = const DigitorRgb.neutral(),
+    double shadowPivot = 0.33,
+    double highlightPivot = 0.67,
+    double transitionWidth = 0.1,
   }) {
     _mutate(() {
       _selectCurrent();
       graph.addLogWheels(
         DigitorLogWheels(
-          shadows: DigitorLogWheel(master: shadows),
-          midtones: DigitorLogWheel(master: midtones),
-          highlights: DigitorLogWheel(master: highlights),
-          global: DigitorLogWheel(master: global),
+          shadows: DigitorLogWheel(master: shadows, rgb: shadowsRgb),
+          midtones: DigitorLogWheel(master: midtones, rgb: midtonesRgb),
+          highlights: DigitorLogWheel(master: highlights, rgb: highlightsRgb),
+          global: DigitorLogWheel(master: global, rgb: globalRgb),
+          shadowPivot: shadowPivot,
+          highlightPivot: highlightPivot,
+          transitionWidth: transitionWidth,
         ),
       );
     });
   }
 
   void applyRgbCurve(double midpointLift) {
+    applyRgbCurves(master: midpointLift);
+  }
+
+  void applyRgbCurves({
+    double master = 0,
+    double red = 0,
+    double green = 0,
+    double blue = 0,
+    int lutSize = 1024,
+  }) {
     _mutate(() {
       _selectCurrent();
-      final y = (0.5 + midpointLift).clamp(0.0, 1.0).toDouble();
+      DigitorCurveChannel channel(double lift) {
+        final y = (0.5 + lift).clamp(0.0, 1.0).toDouble();
+        return DigitorCurveChannel(
+          points: <DigitorCurvePoint>[
+            const DigitorCurvePoint(0, 0),
+            DigitorCurvePoint(0.5, y),
+            const DigitorCurvePoint(1, 1),
+          ],
+        );
+      }
+
       graph.addRgbCurves(
         DigitorRgbCurves(
-          master: DigitorCurveChannel(
-            points: <DigitorCurvePoint>[
-              const DigitorCurvePoint(0, 0),
-              DigitorCurvePoint(0.5, y),
-              const DigitorCurvePoint(1, 1),
-            ],
-          ),
+          master: channel(master),
+          red: channel(red),
+          green: channel(green),
+          blue: channel(blue),
+          lutSize: lutSize,
         ),
       );
     });
   }
 
-  void applyQualifier({required double hueLow, required double hueHigh}) {
+  void applyQualifier({
+    required double hueLow,
+    required double hueHigh,
+    double hueSoftness = 0.05,
+    double saturationLow = 0,
+    double saturationHigh = 1,
+    double saturationSoftness = 0,
+    double luminanceLow = 0,
+    double luminanceHigh = 1,
+    double luminanceSoftness = 0,
+    double blur = 0,
+    double denoise = 0,
+    double cleanBlack = 0,
+    double cleanWhite = 0,
+    bool invert = false,
+    bool matteOutput = false,
+  }) {
     _mutate(() {
       _selectCurrent();
       graph.addHslQualifier(
@@ -262,8 +380,24 @@ class DigitorEngineGateway extends ChangeNotifier {
           hue: DigitorQualifierRange(
             low: hueLow,
             high: hueHigh,
-            softness: 0.05,
+            softness: hueSoftness,
           ),
+          saturation: DigitorQualifierRange(
+            low: saturationLow,
+            high: saturationHigh,
+            softness: saturationSoftness,
+          ),
+          luminance: DigitorQualifierRange(
+            low: luminanceLow,
+            high: luminanceHigh,
+            softness: luminanceSoftness,
+          ),
+          blur: blur,
+          denoise: denoise,
+          cleanBlack: cleanBlack,
+          cleanWhite: cleanWhite,
+          invert: invert,
+          matteOutput: matteOutput,
         ),
       );
     });
@@ -281,15 +415,45 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
+  void applyIdentityLut3d({
+    DigitorLutInterpolation interpolation = DigitorLutInterpolation.tetrahedral,
+  }) {
+    _mutate(() {
+      _selectCurrent();
+      graph.addLut3d(
+        2,
+        const <DigitorLutColor>[
+          DigitorLutColor(0, 0, 0),
+          DigitorLutColor(1, 0, 0),
+          DigitorLutColor(0, 1, 0),
+          DigitorLutColor(1, 1, 0),
+          DigitorLutColor(0, 0, 1),
+          DigitorLutColor(1, 0, 1),
+          DigitorLutColor(0, 1, 1),
+          DigitorLutColor(1, 1, 1),
+        ],
+        interpolation: interpolation,
+      );
+    });
+  }
+
   void applyEffect({
     required DigitorNodeEffectType type,
     required double amount,
     required double radius,
+    double angle = 0,
+    int seed = 0,
   }) {
     _mutate(() {
       _selectCurrent();
       graph.addEffect(
-        DigitorNodeEffect(type: type, amount: amount, radius: radius),
+        DigitorNodeEffect(
+          type: type,
+          amount: amount,
+          radius: radius,
+          angle: angle,
+          seed: seed,
+        ),
       );
     });
   }
@@ -299,15 +463,25 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double width,
     required double height,
     required double feather,
+    double centerX = 0.5,
+    double centerY = 0.5,
+    double rotation = 0,
+    double opacity = 1,
+    bool invert = false,
   }) {
     _mutate(() {
       _selectCurrent();
       graph.addPowerWindow(
         DigitorPowerWindow(
           shape: shape,
+          centerX: centerX,
+          centerY: centerY,
           width: width,
           height: height,
+          rotation: rotation,
           feather: feather,
+          opacity: opacity,
+          invert: invert,
         ),
       );
     });
