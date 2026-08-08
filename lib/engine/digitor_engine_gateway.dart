@@ -6,13 +6,12 @@ import 'package:flutter/foundation.dart';
 
 /// UI-facing adapter only.
 ///
-/// Digitor owns presentation state and file-picking UX. Renderer, decoder,
-/// node graph, platform texture host and processing lifecycle are owned by the
-/// public [DigitorEditorWorkspace] facade in DigitorEngine.
+/// Digitor owns presentation state and file-picking UX. Decoder, renderer,
+/// graph, timeline/audio, platform texture host and export processing remain
+/// owned by [DigitorEditorWorkspace] in DigitorEngine.
 class DigitorEngineGateway extends ChangeNotifier {
   DigitorEditorWorkspace? _workspace;
   DigitorProductionMediaSnapshot? _media;
-
   bool _initializing = false;
   bool _ready = false;
   String? _error;
@@ -23,18 +22,18 @@ class DigitorEngineGateway extends ChangeNotifier {
   String? get error => _error;
   String? get mediaPath => _mediaPath;
   int? get selectedNode => _workspace?.selectedNode;
+  int get graphRevision => _workspace?.graphRevision ?? 0;
+  int get parameterRevision => _workspace?.parameterRevision ?? 0;
+  String get recipeIdentity => _workspace?.recipeIdentity ?? '';
   DigitorRendererInfo? get renderer => _workspace?.renderer;
-  DigitorFlutterHostCapabilities? get hostCapabilities =>
-      _workspace?.hostCapabilities;
+  DigitorFlutterHostCapabilities? get hostCapabilities => _workspace?.hostCapabilities;
   DigitorProductionDecoderInfo? get decoder => _media?.decoder;
   DigitorProductionDecodedFrameInfo? get firstFrame => _media?.firstFrame;
   DigitorProductionNativeSurface? get nativeSurface => _media?.nativeSurface;
 
   DigitorEditorWorkspace get workspace {
     final value = _workspace;
-    if (value == null) {
-      throw StateError('DigitorEngine workspace is not ready.');
-    }
+    if (value == null) throw StateError('DigitorEngine workspace is not ready.');
     return value;
   }
 
@@ -61,8 +60,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     final frame = firstFrame;
     final decoderInfo = decoder;
     final size = frame == null ? '' : ' • ${frame.width}×${frame.height}';
-    final implementation =
-        decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
+    final implementation = decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
     final residency = frame == null
         ? ''
         : frame.gpuResident
@@ -76,18 +74,14 @@ class DigitorEngineGateway extends ChangeNotifier {
   String get nativeSurfaceLabel {
     final value = nativeSurface;
     if (value == null) return 'No native decoder surface';
-    return '${value.platform.name} • ${value.handleType.name} • '
-        '${value.pixelFormat.name} • ${value.width}×${value.height}';
+    return '${value.platform.name} • ${value.handleType.name} • ${value.pixelFormat.name} • ${value.width}×${value.height}';
   }
-
-  String get recipeIdentity => _workspace?.recipeIdentity ?? '';
 
   Future<void> initialize() async {
     if (_ready || _initializing) return;
     _initializing = true;
     _error = null;
     notifyListeners();
-
     try {
       _workspace = await DigitorEditorWorkspace.create(
         preferredBackend: DigitorBackend.automatic,
@@ -106,7 +100,6 @@ class DigitorEngineGateway extends ChangeNotifier {
     if (!_ready) return;
     _error = null;
     notifyListeners();
-
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.video,
@@ -124,21 +117,51 @@ class DigitorEngineGateway extends ChangeNotifier {
     notifyListeners();
   }
 
+  DigitorTimelineStatus? timelineStatus() {
+    if (!_ready) return null;
+    try {
+      return workspace.timelineStatus();
+    } catch (error) {
+      _error = error.toString();
+      return null;
+    }
+  }
+
+  DigitorTimelineTelemetry? timelineTelemetry() {
+    if (!_ready) return null;
+    try {
+      return workspace.timelineTelemetry();
+    } catch (error) {
+      _error = error.toString();
+      return null;
+    }
+  }
+
+  void play() => _mutate(workspace.play);
+  void pause() => _mutate(workspace.pause);
+  void stop() => _mutate(workspace.stop);
+  void seek(int positionUs) => _mutate(() => workspace.seek(positionUs));
+  void setAudioControls({
+    required double masterGainDb,
+    required double playbackRate,
+    required bool preservePitch,
+    required bool enableDynamics,
+  }) => _mutate(() => workspace.setAudioControls(
+        masterGainDb: masterGainDb,
+        playbackRate: playbackRate,
+        preservePitch: preservePitch,
+        enableDynamics: enableDynamics,
+      ));
+
   void selectNode(int node) => _mutate(() => workspace.selectNode(node));
   void addSerialNode() => _mutate(workspace.addSerialNode);
   void addParallelNodes() => _mutate(workspace.addParallelNodes);
-  void convertSelectedToParallel() =>
-      _mutate(workspace.convertSelectedToParallel);
-  void connectNodes(int source, int destination) =>
-      _mutate(() => workspace.connectNodes(source, destination));
-  void disconnectNodes(int source, int destination) =>
-      _mutate(() => workspace.disconnectNodes(source, destination));
-  void moveSelectedNode(double x, double y) =>
-      _mutate(() => workspace.moveSelectedNode(x, y));
-  void setSelectedEnabled(bool enabled) =>
-      _mutate(() => workspace.setSelectedEnabled(enabled));
-  void setSelectedBypassed(bool bypassed) =>
-      _mutate(() => workspace.setSelectedBypassed(bypassed));
+  void convertSelectedToParallel() => _mutate(workspace.convertSelectedToParallel);
+  void connectNodes(int source, int destination) => _mutate(() => workspace.connectNodes(source, destination));
+  void disconnectNodes(int source, int destination) => _mutate(() => workspace.disconnectNodes(source, destination));
+  void moveSelectedNode(double x, double y) => _mutate(() => workspace.moveSelectedNode(x, y));
+  void setSelectedEnabled(bool enabled) => _mutate(() => workspace.setSelectedEnabled(enabled));
+  void setSelectedBypassed(bool bypassed) => _mutate(() => workspace.setSelectedBypassed(bypassed));
   void removeSelectedNode() => _mutate(workspace.removeSelectedNode);
   void clearSelectedOperations() => _mutate(workspace.clearSelectedOperations);
 
@@ -152,23 +175,17 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double shadows,
     required double hue,
     required double colorBoost,
-  }) {
-    _mutate(() {
-      workspace.addCorrection(
-        DigitorCorrection(
-          exposure: exposure,
-          contrast: contrast,
-          saturation: saturation,
-          temperature: temperature,
-          tint: tint,
-          highlights: highlights,
-          shadows: shadows,
-          hue: hue,
-          colorBoost: colorBoost,
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addCorrection(DigitorCorrection(
+        exposure: exposure,
+        contrast: contrast,
+        saturation: saturation,
+        temperature: temperature,
+        tint: tint,
+        highlights: highlights,
+        shadows: shadows,
+        hue: hue,
+        colorBoost: colorBoost,
+      )));
 
   void applyPrimaryWheels({
     required double lift,
@@ -179,18 +196,12 @@ class DigitorEngineGateway extends ChangeNotifier {
     DigitorRgb gammaRgb = const DigitorRgb.neutral(),
     DigitorRgb gainRgb = const DigitorRgb.neutral(),
     DigitorRgb offsetRgb = const DigitorRgb.neutral(),
-  }) {
-    _mutate(() {
-      workspace.addPrimaryWheels(
-        DigitorPrimaryWheels(
-          lift: DigitorPrimaryWheel(master: lift, rgb: liftRgb),
-          gamma: DigitorPrimaryWheel(master: gamma, rgb: gammaRgb),
-          gain: DigitorPrimaryWheel(master: gain, rgb: gainRgb),
-          offset: DigitorPrimaryWheel(master: offset, rgb: offsetRgb),
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addPrimaryWheels(DigitorPrimaryWheels(
+        lift: DigitorPrimaryWheel(master: lift, rgb: liftRgb),
+        gamma: DigitorPrimaryWheel(master: gamma, rgb: gammaRgb),
+        gain: DigitorPrimaryWheel(master: gain, rgb: gainRgb),
+        offset: DigitorPrimaryWheel(master: offset, rgb: offsetRgb),
+      )));
 
   void applyLogWheels({
     required double shadows,
@@ -204,21 +215,15 @@ class DigitorEngineGateway extends ChangeNotifier {
     double shadowPivot = 0.33,
     double highlightPivot = 0.67,
     double transitionWidth = 0.1,
-  }) {
-    _mutate(() {
-      workspace.addLogWheels(
-        DigitorLogWheels(
-          shadows: DigitorLogWheel(master: shadows, rgb: shadowsRgb),
-          midtones: DigitorLogWheel(master: midtones, rgb: midtonesRgb),
-          highlights: DigitorLogWheel(master: highlights, rgb: highlightsRgb),
-          global: DigitorLogWheel(master: global, rgb: globalRgb),
-          shadowPivot: shadowPivot,
-          highlightPivot: highlightPivot,
-          transitionWidth: transitionWidth,
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addLogWheels(DigitorLogWheels(
+        shadows: DigitorLogWheel(master: shadows, rgb: shadowsRgb),
+        midtones: DigitorLogWheel(master: midtones, rgb: midtonesRgb),
+        highlights: DigitorLogWheel(master: highlights, rgb: highlightsRgb),
+        global: DigitorLogWheel(master: global, rgb: globalRgb),
+        shadowPivot: shadowPivot,
+        highlightPivot: highlightPivot,
+        transitionWidth: transitionWidth,
+      )));
 
   void applyRgbCurve(double midpointLift) => applyRgbCurves(master: midpointLift);
 
@@ -228,30 +233,23 @@ class DigitorEngineGateway extends ChangeNotifier {
     double green = 0,
     double blue = 0,
     int lutSize = 1024,
-  }) {
-    _mutate(() {
-      DigitorCurveChannel channel(double lift) {
-        final y = (0.5 + lift).clamp(0.0, 1.0).toDouble();
-        return DigitorCurveChannel(
-          points: <DigitorCurvePoint>[
+  }) => _mutate(() {
+        DigitorCurveChannel channel(double lift) {
+          final y = (0.5 + lift).clamp(0.0, 1.0).toDouble();
+          return DigitorCurveChannel(points: <DigitorCurvePoint>[
             const DigitorCurvePoint(0, 0),
             DigitorCurvePoint(0.5, y),
             const DigitorCurvePoint(1, 1),
-          ],
-        );
-      }
-
-      workspace.addRgbCurves(
-        DigitorRgbCurves(
+          ]);
+        }
+        workspace.addRgbCurves(DigitorRgbCurves(
           master: channel(master),
           red: channel(red),
           green: channel(green),
           blue: channel(blue),
           lutSize: lutSize,
-        ),
-      );
-    });
-  }
+        ));
+      });
 
   void applyQualifier({
     required double hueLow,
@@ -269,67 +267,35 @@ class DigitorEngineGateway extends ChangeNotifier {
     double cleanWhite = 0,
     bool invert = false,
     bool matteOutput = false,
-  }) {
-    _mutate(() {
-      workspace.addHslQualifier(
-        DigitorHslQualifier(
-          hue: DigitorQualifierRange(
-            low: hueLow,
-            high: hueHigh,
-            softness: hueSoftness,
-          ),
-          saturation: DigitorQualifierRange(
-            low: saturationLow,
-            high: saturationHigh,
-            softness: saturationSoftness,
-          ),
-          luminance: DigitorQualifierRange(
-            low: luminanceLow,
-            high: luminanceHigh,
-            softness: luminanceSoftness,
-          ),
-          blur: blur,
-          denoise: denoise,
-          cleanBlack: cleanBlack,
-          cleanWhite: cleanWhite,
-          invert: invert,
-          matteOutput: matteOutput,
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addHslQualifier(DigitorHslQualifier(
+        hue: DigitorQualifierRange(low: hueLow, high: hueHigh, softness: hueSoftness),
+        saturation: DigitorQualifierRange(low: saturationLow, high: saturationHigh, softness: saturationSoftness),
+        luminance: DigitorQualifierRange(low: luminanceLow, high: luminanceHigh, softness: luminanceSoftness),
+        blur: blur,
+        denoise: denoise,
+        cleanBlack: cleanBlack,
+        cleanWhite: cleanWhite,
+        invert: invert,
+        matteOutput: matteOutput,
+      )));
 
-  void applyIdentityLut() {
-    _mutate(() {
-      workspace.addLut1d(
-        const <DigitorLutColor>[
-          DigitorLutColor(0, 0, 0),
-          DigitorLutColor(1, 1, 1),
-        ],
-      );
-    });
-  }
+  void applyIdentityLut() => _mutate(() => workspace.addLut1d(const <DigitorLutColor>[
+        DigitorLutColor(0, 0, 0),
+        DigitorLutColor(1, 1, 1),
+      ]));
 
   void applyIdentityLut3d({
     DigitorLutInterpolation interpolation = DigitorLutInterpolation.tetrahedral,
-  }) {
-    _mutate(() {
-      workspace.addLut3d(
+  }) => _mutate(() => workspace.addLut3d(
         2,
         const <DigitorLutColor>[
-          DigitorLutColor(0, 0, 0),
-          DigitorLutColor(1, 0, 0),
-          DigitorLutColor(0, 1, 0),
-          DigitorLutColor(1, 1, 0),
-          DigitorLutColor(0, 0, 1),
-          DigitorLutColor(1, 0, 1),
-          DigitorLutColor(0, 1, 1),
-          DigitorLutColor(1, 1, 1),
+          DigitorLutColor(0, 0, 0), DigitorLutColor(1, 0, 0),
+          DigitorLutColor(0, 1, 0), DigitorLutColor(1, 1, 0),
+          DigitorLutColor(0, 0, 1), DigitorLutColor(1, 0, 1),
+          DigitorLutColor(0, 1, 1), DigitorLutColor(1, 1, 1),
         ],
         interpolation: interpolation,
-      );
-    });
-  }
+      ));
 
   void applyEffect({
     required DigitorNodeEffectType type,
@@ -337,19 +303,13 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double radius,
     double angle = 0,
     int seed = 0,
-  }) {
-    _mutate(() {
-      workspace.addEffect(
-        DigitorNodeEffect(
-          type: type,
-          amount: amount,
-          radius: radius,
-          angle: angle,
-          seed: seed,
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addEffect(DigitorNodeEffect(
+        type: type,
+        amount: amount,
+        radius: radius,
+        angle: angle,
+        seed: seed,
+      )));
 
   void applyPowerWindow({
     required DigitorPowerWindowShape shape,
@@ -361,23 +321,17 @@ class DigitorEngineGateway extends ChangeNotifier {
     double rotation = 0,
     double opacity = 1,
     bool invert = false,
-  }) {
-    _mutate(() {
-      workspace.addPowerWindow(
-        DigitorPowerWindow(
-          shape: shape,
-          centerX: centerX,
-          centerY: centerY,
-          width: width,
-          height: height,
-          rotation: rotation,
-          feather: feather,
-          opacity: opacity,
-          invert: invert,
-        ),
-      );
-    });
-  }
+  }) => _mutate(() => workspace.addPowerWindow(DigitorPowerWindow(
+        shape: shape,
+        centerX: centerX,
+        centerY: centerY,
+        width: width,
+        height: height,
+        rotation: rotation,
+        feather: feather,
+        opacity: opacity,
+        invert: invert,
+      )));
 
   void _mutate(void Function() action) {
     _error = null;
