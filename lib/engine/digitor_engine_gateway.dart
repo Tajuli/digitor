@@ -106,7 +106,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await FilePicker().pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.video,
         allowMultiple: false,
         withData: false,
