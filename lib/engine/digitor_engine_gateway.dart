@@ -4,8 +4,8 @@ import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
-/// UI-facing adapter only. All media/render/color operations are delegated to
-/// DigitorEngine; this class never implements an alternate processing path.
+/// UI-facing adapter only. All media, graph and image-processing work is
+/// delegated to DigitorEngine.
 class DigitorEngineGateway extends ChangeNotifier {
   DigitorEngine? _engine;
   DigitorNodeGraph? _graph;
@@ -34,7 +34,9 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   DigitorNodeGraph get graph {
     final value = _graph;
-    if (value == null) throw StateError('DigitorEngine graph is not ready.');
+    if (value == null) {
+      throw StateError('DigitorEngine graph is not ready.');
+    }
     return value;
   }
 
@@ -61,7 +63,8 @@ class DigitorEngineGateway extends ChangeNotifier {
     final frame = _firstFrame;
     final decoderInfo = _decoder;
     final size = frame == null ? '' : ' • ${frame.width}×${frame.height}';
-    final implementation = decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
+    final implementation =
+        decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
     return '${_basename(path)}$size$implementation';
   }
 
@@ -70,6 +73,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     _initializing = true;
     _error = null;
     notifyListeners();
+
     try {
       _engine = DigitorEngine.initialize(
         preferredBackend: DigitorBackend.automatic,
@@ -100,6 +104,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     if (!_ready) return;
     _error = null;
     notifyListeners();
+
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.video,
@@ -128,8 +133,9 @@ class DigitorEngineGateway extends ChangeNotifier {
   void addSerialNode() {
     _mutate(() {
       final after = _selectedNode ?? graph.endpoints.input;
-      _selectedNode = graph.addSerialAfter(after, name: 'Serial Node');
-      graph.select(_selectedNode!);
+      final node = graph.addSerialAfter(after, name: 'Serial Node');
+      _selectedNode = node;
+      graph.select(node);
     });
   }
 
@@ -147,15 +153,18 @@ class DigitorEngineGateway extends ChangeNotifier {
       final selected = _selectedNode;
       if (selected == null) return;
       graph.remove(selected);
-      final endpoints = graph.endpoints;
-      _selectedNode = graph.addSerialAfter(endpoints.input, name: 'Grade');
-      graph.select(_selectedNode!);
+      final replacement = graph.addSerialAfter(
+        graph.endpoints.input,
+        name: 'Grade',
+      );
+      _selectedNode = replacement;
+      graph.select(replacement);
     });
   }
 
   void clearSelectedOperations() {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.clearOperations(_selectedNode!);
     });
   }
@@ -172,7 +181,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double colorBoost,
   }) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addCorrection(
         DigitorCorrection(
           exposure: exposure,
@@ -196,7 +205,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double offset,
   }) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addPrimaryWheels(
         DigitorPrimaryWheels(
           lift: DigitorPrimaryWheel(master: lift),
@@ -215,7 +224,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double global,
   }) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addLogWheels(
         DigitorLogWheels(
           shadows: DigitorLogWheel(master: shadows),
@@ -229,8 +238,8 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   void applyRgbCurve(double midpointLift) {
     _mutate(() {
-      _ensureSelected();
-      final y = (0.5 + midpointLift).clamp(0.0, 1.0);
+      _selectCurrent();
+      final y = (0.5 + midpointLift).clamp(0.0, 1.0).toDouble();
       graph.addRgbCurves(
         DigitorRgbCurves(
           master: DigitorCurveChannel(
@@ -247,10 +256,14 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   void applyQualifier({required double hueLow, required double hueHigh}) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addHslQualifier(
         DigitorHslQualifier(
-          hue: DigitorQualifierRange(low: hueLow, high: hueHigh, softness: 0.05),
+          hue: DigitorQualifierRange(
+            low: hueLow,
+            high: hueHigh,
+            softness: 0.05,
+          ),
         ),
       );
     });
@@ -258,7 +271,7 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   void applyIdentityLut() {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addLut1d(
         const <DigitorLutColor>[
           DigitorLutColor(0, 0, 0),
@@ -274,7 +287,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double radius,
   }) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addEffect(
         DigitorNodeEffect(type: type, amount: amount, radius: radius),
       );
@@ -288,7 +301,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double feather,
   }) {
     _mutate(() {
-      _ensureSelected();
+      _selectCurrent();
       graph.addPowerWindow(
         DigitorPowerWindow(
           shape: shape,
@@ -300,7 +313,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
-  void _ensureSelected() {
+  void _selectCurrent() {
     final selected = _selectedNode;
     if (selected == null) throw StateError('Select a node first.');
     graph.select(selected);
