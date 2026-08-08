@@ -1,32 +1,26 @@
 name: digitor
-description: "A new Flutter project."
-publish_to: 'none' 
-version: 1.0.0+1
+description: Digitor professional video editor UI powered exclusively by DigitorEngine.
+publish_to: none
+version: 0.1.0+1
 
 environment:
-  sdk: ^3.8.1
-  
+  sdk: '>=3.10.0 <4.0.0'
+  flutter: '>=3.38.0'
+
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  image_picker: ^1.1.2
-  file_picker: ^10.3.3
-  video_thumbnail: ^0.5.6
-  video_player: ^2.10.0
-  # Windows implementation for the official video_player API.
-  video_player_win: ^3.2.1
-  video_compress: ^3.1.4
-  just_audio: ^0.10.6
-  # Required desktop implementation; just_audio does not bundle Windows itself.
-  just_audio_windows: ^0.2.3
-  path_provider: ^2.1.5
-  path: ^1.9.1
+  file_picker: ^11.0.2
+  digitor_engine_ffi:
+    git:
+      url: https://github.com/Tajuli/DigitorEngine.git
+      ref: 5a0a4b05cc5fcf22459ebc9aefcd880bf485a795
+      path: dart/digitor_engine_ffi
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
-  
+  flutter_lints: ^6.0.0
+
 flutter:
   uses-material-design: true
