@@ -220,8 +220,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
-  void applyRgbCurve(double midpointLift) =>
-      applyRgbCurves(master: midpointLift);
+  void applyRgbCurve(double midpointLift) => applyRgbCurves(master: midpointLift);
 
   void applyRgbCurves({
     double master = 0,
@@ -380,7 +379,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
-  void _mutate(Object? Function() action) {
+  void _mutate(void Function() action) {
     _error = null;
     try {
       action();
