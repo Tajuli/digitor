@@ -9,7 +9,7 @@ import 'package:flutter/foundation.dart';
 class DigitorEngineGateway extends ChangeNotifier {
   DigitorEngine? _engine;
   DigitorNodeGraph? _graph;
-  DigitorProductionMediaSource? _media;
+  DigitorProductionMediaPipeline? _mediaPipeline;
   DigitorFlutterPlatformHost? _platformHost;
   DigitorRendererInfo? _renderer;
   DigitorFlutterHostCapabilities? _hostCapabilities;
@@ -98,6 +98,7 @@ class DigitorEngineGateway extends ChangeNotifier {
         allowCpuFallback: true,
       );
       _renderer = _engine!.rendererInfo;
+      _mediaPipeline = DigitorProductionMediaPipeline(renderer: _renderer!);
       _graph = DigitorNodeGraph.create();
       final endpoints = graph.endpoints;
       _selectedNode = graph.addSerialAfter(endpoints.input, name: 'Grade 01');
@@ -132,24 +133,15 @@ class DigitorEngineGateway extends ChangeNotifier {
       final path = result?.files.single.path;
       if (path == null || path.isEmpty) return;
 
-      _media?.close();
-      _media = DigitorProductionMediaSource.open(
-        path,
-        hardwareDecode: DigitorHardwareDecode.automatic,
-        allowCpuFallback: true,
-        requireZeroCopy: false,
-      );
-      _mediaPath = path;
-      _decoder = _media!.decoderInfo;
-      _firstFrame = _media!.decode(0);
-      _nativeSurface = null;
-      if (_firstFrame!.gpuResident && _decoder!.nativeSurfaceOutput) {
-        try {
-          _nativeSurface = _media!.nativeSurface;
-        } catch (_) {
-          _nativeSurface = null;
-        }
+      final pipeline = _mediaPipeline;
+      if (pipeline == null) {
+        throw StateError('DigitorEngine media pipeline is not ready.');
       }
+      final snapshot = pipeline.open(path);
+      _mediaPath = snapshot.path;
+      _decoder = snapshot.decoder;
+      _firstFrame = snapshot.firstFrame;
+      _nativeSurface = snapshot.nativeSurface;
     } catch (error) {
       _error = error.toString();
     }
@@ -510,7 +502,7 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   @override
   void dispose() {
-    _media?.close();
+    _mediaPipeline?.close();
     _graph?.dispose();
     final host = _platformHost;
     if (host != null) unawaited(host.close());
