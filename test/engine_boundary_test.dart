@@ -12,6 +12,7 @@ void main() {
       RegExp(r'ffmpeg_kit', caseSensitive: false),
       RegExp(r'androidx\.media3', caseSensitive: false),
       RegExp(r'package:video_compress', caseSensitive: false),
+      RegExp(r'DigitorProductionMediaSource\.open\('),
     ];
 
     final violations = <String>[];
@@ -41,7 +42,8 @@ void main() {
     final source = gateway.readAsStringSync();
     expect(source, contains('package:digitor_engine_ffi/digitor_engine_ffi.dart'));
     expect(source, contains('DigitorNodeGraph'));
-    expect(source, contains('DigitorProductionMediaSource'));
+    expect(source, contains('DigitorProductionMediaPipeline'));
     expect(source, contains('DigitorFlutterPlatformHost'));
+    expect(source, isNot(contains('DigitorProductionMediaSource.open(')));
   });
 }
