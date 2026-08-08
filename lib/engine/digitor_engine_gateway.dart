@@ -4,52 +4,48 @@ import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
-/// UI-facing adapter only. All media, graph and image-processing work is
-/// delegated to DigitorEngine.
+/// UI-facing adapter only.
+///
+/// Digitor owns presentation state and file-picking UX. Renderer, decoder,
+/// node graph, platform texture host and processing lifecycle are owned by the
+/// public [DigitorEditorWorkspace] facade in DigitorEngine.
 class DigitorEngineGateway extends ChangeNotifier {
-  DigitorEngine? _engine;
-  DigitorNodeGraph? _graph;
-  DigitorProductionMediaPipeline? _mediaPipeline;
-  DigitorFlutterPlatformHost? _platformHost;
-  DigitorRendererInfo? _renderer;
-  DigitorFlutterHostCapabilities? _hostCapabilities;
-  DigitorProductionDecoderInfo? _decoder;
-  DigitorProductionDecodedFrameInfo? _firstFrame;
-  DigitorProductionNativeSurface? _nativeSurface;
+  DigitorEditorWorkspace? _workspace;
+  DigitorProductionMediaSnapshot? _media;
 
   bool _initializing = false;
   bool _ready = false;
   String? _error;
   String? _mediaPath;
-  int? _selectedNode;
 
   bool get initializing => _initializing;
   bool get ready => _ready;
   String? get error => _error;
   String? get mediaPath => _mediaPath;
-  int? get selectedNode => _selectedNode;
-  DigitorRendererInfo? get renderer => _renderer;
-  DigitorFlutterHostCapabilities? get hostCapabilities => _hostCapabilities;
-  DigitorProductionDecoderInfo? get decoder => _decoder;
-  DigitorProductionDecodedFrameInfo? get firstFrame => _firstFrame;
-  DigitorProductionNativeSurface? get nativeSurface => _nativeSurface;
+  int? get selectedNode => _workspace?.selectedNode;
+  DigitorRendererInfo? get renderer => _workspace?.renderer;
+  DigitorFlutterHostCapabilities? get hostCapabilities =>
+      _workspace?.hostCapabilities;
+  DigitorProductionDecoderInfo? get decoder => _media?.decoder;
+  DigitorProductionDecodedFrameInfo? get firstFrame => _media?.firstFrame;
+  DigitorProductionNativeSurface? get nativeSurface => _media?.nativeSurface;
 
-  DigitorNodeGraph get graph {
-    final value = _graph;
+  DigitorEditorWorkspace get workspace {
+    final value = _workspace;
     if (value == null) {
-      throw StateError('DigitorEngine graph is not ready.');
+      throw StateError('DigitorEngine workspace is not ready.');
     }
     return value;
   }
 
   String get rendererLabel {
-    final value = _renderer;
+    final value = renderer;
     if (value == null) return 'Engine not initialized';
     return '${value.backendName} • ${value.deviceName}';
   }
 
   String get hostLabel {
-    final value = _hostCapabilities;
+    final value = hostCapabilities;
     if (value == null) return 'Texture host unavailable';
     final mode = value.directDescriptorPresentation
         ? 'direct texture'
@@ -62,8 +58,8 @@ class DigitorEngineGateway extends ChangeNotifier {
   String get mediaLabel {
     final path = _mediaPath;
     if (path == null) return 'No media loaded';
-    final frame = _firstFrame;
-    final decoderInfo = _decoder;
+    final frame = firstFrame;
+    final decoderInfo = decoder;
     final size = frame == null ? '' : ' • ${frame.width}×${frame.height}';
     final implementation =
         decoderInfo == null ? '' : ' • ${decoderInfo.implementation}';
@@ -78,13 +74,13 @@ class DigitorEngineGateway extends ChangeNotifier {
   }
 
   String get nativeSurfaceLabel {
-    final value = _nativeSurface;
+    final value = nativeSurface;
     if (value == null) return 'No native decoder surface';
     return '${value.platform.name} • ${value.handleType.name} • '
         '${value.pixelFormat.name} • ${value.width}×${value.height}';
   }
 
-  String get recipeIdentity => _graph?.recipeIdentity ?? '';
+  String get recipeIdentity => _workspace?.recipeIdentity ?? '';
 
   Future<void> initialize() async {
     if (_ready || _initializing) return;
@@ -93,23 +89,10 @@ class DigitorEngineGateway extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _engine = DigitorEngine.initialize(
+      _workspace = await DigitorEditorWorkspace.create(
         preferredBackend: DigitorBackend.automatic,
         allowCpuFallback: true,
       );
-      _renderer = _engine!.rendererInfo;
-      _mediaPipeline = DigitorProductionMediaPipeline(renderer: _renderer!);
-      _graph = DigitorNodeGraph.create();
-      final endpoints = graph.endpoints;
-      _selectedNode = graph.addSerialAfter(endpoints.input, name: 'Grade 01');
-      graph.select(_selectedNode!);
-
-      _platformHost = DigitorFlutterPlatformHost();
-      try {
-        _hostCapabilities = await _platformHost!.capabilities();
-      } catch (_) {
-        _hostCapabilities = null;
-      }
       _ready = true;
     } catch (error) {
       _error = error.toString();
@@ -125,111 +108,39 @@ class DigitorEngineGateway extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await FilePicker.pickFiles(
+      final result = await FilePicker.platform.pickFiles(
         type: FileType.video,
         allowMultiple: false,
         withData: false,
       );
       final path = result?.files.single.path;
       if (path == null || path.isEmpty) return;
-
-      final pipeline = _mediaPipeline;
-      if (pipeline == null) {
-        throw StateError('DigitorEngine media pipeline is not ready.');
-      }
-      final snapshot = pipeline.open(path);
+      final snapshot = workspace.openMedia(path);
+      _media = snapshot;
       _mediaPath = snapshot.path;
-      _decoder = snapshot.decoder;
-      _firstFrame = snapshot.firstFrame;
-      _nativeSurface = snapshot.nativeSurface;
     } catch (error) {
       _error = error.toString();
     }
     notifyListeners();
   }
 
-  void selectNode(int node) {
-    _mutate(() {
-      graph.select(node);
-      _selectedNode = node;
-    });
-  }
-
-  void addSerialNode() {
-    _mutate(() {
-      final after = _selectedNode ?? graph.endpoints.input;
-      final node = graph.addSerialAfter(after, name: 'Serial Node');
-      _selectedNode = node;
-      graph.select(node);
-    });
-  }
-
-  void addParallelNodes() {
-    _mutate(() {
-      final after = _selectedNode ?? graph.endpoints.input;
-      final nodes = graph.addParallelAfter(after);
-      _selectedNode = nodes.first;
-      graph.select(nodes.first);
-    });
-  }
-
-  void convertSelectedToParallel() {
-    _mutate(() {
-      _selectCurrent();
-      graph.convertToParallel(_selectedNode!);
-    });
-  }
-
-  void connectNodes(int source, int destination) {
-    _mutate(() => graph.connect(source, destination));
-  }
-
-  void disconnectNodes(int source, int destination) {
-    _mutate(() => graph.disconnect(source, destination));
-  }
-
-  void moveSelectedNode(double x, double y) {
-    _mutate(() {
-      _selectCurrent();
-      graph.setPosition(_selectedNode!, x, y);
-    });
-  }
-
-  void setSelectedEnabled(bool enabled) {
-    _mutate(() {
-      _selectCurrent();
-      graph.setEnabled(_selectedNode!, enabled);
-    });
-  }
-
-  void setSelectedBypassed(bool bypassed) {
-    _mutate(() {
-      _selectCurrent();
-      graph.setBypassed(_selectedNode!, bypassed);
-    });
-  }
-
-  void removeSelectedNode() {
-    _mutate(() {
-      final selected = _selectedNode;
-      if (selected == null) return;
-      graph.remove(selected);
-      final endpoints = graph.endpoints;
-      final nativeSelection = graph.selectedNode;
-      if (nativeSelection == endpoints.input || nativeSelection == endpoints.output) {
-        _selectedNode = null;
-      } else {
-        _selectedNode = nativeSelection;
-      }
-    });
-  }
-
-  void clearSelectedOperations() {
-    _mutate(() {
-      _selectCurrent();
-      graph.clearOperations(_selectedNode!);
-    });
-  }
+  void selectNode(int node) => _mutate(() => workspace.selectNode(node));
+  void addSerialNode() => _mutate(workspace.addSerialNode);
+  void addParallelNodes() => _mutate(workspace.addParallelNodes);
+  void convertSelectedToParallel() =>
+      _mutate(workspace.convertSelectedToParallel);
+  void connectNodes(int source, int destination) =>
+      _mutate(() => workspace.connectNodes(source, destination));
+  void disconnectNodes(int source, int destination) =>
+      _mutate(() => workspace.disconnectNodes(source, destination));
+  void moveSelectedNode(double x, double y) =>
+      _mutate(() => workspace.moveSelectedNode(x, y));
+  void setSelectedEnabled(bool enabled) =>
+      _mutate(() => workspace.setSelectedEnabled(enabled));
+  void setSelectedBypassed(bool bypassed) =>
+      _mutate(() => workspace.setSelectedBypassed(bypassed));
+  void removeSelectedNode() => _mutate(workspace.removeSelectedNode);
+  void clearSelectedOperations() => _mutate(workspace.clearSelectedOperations);
 
   void applyCorrection({
     required double exposure,
@@ -243,8 +154,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     required double colorBoost,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addCorrection(
+      workspace.addCorrection(
         DigitorCorrection(
           exposure: exposure,
           contrast: contrast,
@@ -271,8 +181,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     DigitorRgb offsetRgb = const DigitorRgb.neutral(),
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addPrimaryWheels(
+      workspace.addPrimaryWheels(
         DigitorPrimaryWheels(
           lift: DigitorPrimaryWheel(master: lift, rgb: liftRgb),
           gamma: DigitorPrimaryWheel(master: gamma, rgb: gammaRgb),
@@ -297,8 +206,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     double transitionWidth = 0.1,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addLogWheels(
+      workspace.addLogWheels(
         DigitorLogWheels(
           shadows: DigitorLogWheel(master: shadows, rgb: shadowsRgb),
           midtones: DigitorLogWheel(master: midtones, rgb: midtonesRgb),
@@ -312,9 +220,8 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
-  void applyRgbCurve(double midpointLift) {
-    applyRgbCurves(master: midpointLift);
-  }
+  void applyRgbCurve(double midpointLift) =>
+      applyRgbCurves(master: midpointLift);
 
   void applyRgbCurves({
     double master = 0,
@@ -324,7 +231,6 @@ class DigitorEngineGateway extends ChangeNotifier {
     int lutSize = 1024,
   }) {
     _mutate(() {
-      _selectCurrent();
       DigitorCurveChannel channel(double lift) {
         final y = (0.5 + lift).clamp(0.0, 1.0).toDouble();
         return DigitorCurveChannel(
@@ -336,7 +242,7 @@ class DigitorEngineGateway extends ChangeNotifier {
         );
       }
 
-      graph.addRgbCurves(
+      workspace.addRgbCurves(
         DigitorRgbCurves(
           master: channel(master),
           red: channel(red),
@@ -366,8 +272,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     bool matteOutput = false,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addHslQualifier(
+      workspace.addHslQualifier(
         DigitorHslQualifier(
           hue: DigitorQualifierRange(
             low: hueLow,
@@ -397,8 +302,7 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   void applyIdentityLut() {
     _mutate(() {
-      _selectCurrent();
-      graph.addLut1d(
+      workspace.addLut1d(
         const <DigitorLutColor>[
           DigitorLutColor(0, 0, 0),
           DigitorLutColor(1, 1, 1),
@@ -411,8 +315,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     DigitorLutInterpolation interpolation = DigitorLutInterpolation.tetrahedral,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addLut3d(
+      workspace.addLut3d(
         2,
         const <DigitorLutColor>[
           DigitorLutColor(0, 0, 0),
@@ -437,8 +340,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     int seed = 0,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addEffect(
+      workspace.addEffect(
         DigitorNodeEffect(
           type: type,
           amount: amount,
@@ -462,8 +364,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     bool invert = false,
   }) {
     _mutate(() {
-      _selectCurrent();
-      graph.addPowerWindow(
+      workspace.addPowerWindow(
         DigitorPowerWindow(
           shape: shape,
           centerX: centerX,
@@ -479,13 +380,7 @@ class DigitorEngineGateway extends ChangeNotifier {
     });
   }
 
-  void _selectCurrent() {
-    final selected = _selectedNode;
-    if (selected == null) throw StateError('Select a node first.');
-    graph.select(selected);
-  }
-
-  void _mutate(void Function() action) {
+  void _mutate(Object? Function() action) {
     _error = null;
     try {
       action();
@@ -502,12 +397,9 @@ class DigitorEngineGateway extends ChangeNotifier {
 
   @override
   void dispose() {
-    _mediaPipeline?.close();
-    _graph?.dispose();
-    final host = _platformHost;
-    if (host != null) unawaited(host.close());
-    final engine = _engine;
-    if (engine != null) unawaited(engine.close());
+    final value = _workspace;
+    _workspace = null;
+    if (value != null) unawaited(value.close());
     super.dispose();
   }
 }
