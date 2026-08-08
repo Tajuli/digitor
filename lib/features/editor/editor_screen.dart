@@ -277,35 +277,204 @@ class _PreviewPanel extends StatelessWidget {
   }
 }
 
-class _TimelineStrip extends StatelessWidget {
+class _TimelineStrip extends StatefulWidget {
   const _TimelineStrip({required this.gateway});
   final DigitorEngineGateway gateway;
 
   @override
+  State<_TimelineStrip> createState() => _TimelineStripState();
+}
+
+class _TimelineStripState extends State<_TimelineStrip> {
+  late final DigitorTimelineSession _session;
+  Timer? _poller;
+  DigitorTimelineStatus? _status;
+  DigitorTimelineTelemetry? _telemetry;
+  String? _publishedMediaPath;
+  int _revision = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _session = DigitorTimelineSession.create(
+      sampleRate: 48000,
+      channels: 2,
+      durationUs: 0,
+    );
+    _publishIfNeeded();
+    _refreshStatus();
+    _poller = Timer.periodic(
+      const Duration(milliseconds: 200),
+      (_) => _refreshStatus(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _TimelineStrip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _publishIfNeeded();
+  }
+
+  void _publishIfNeeded() {
+    final mediaPath = widget.gateway.mediaPath;
+    if (_publishedMediaPath == mediaPath && _revision != 0) return;
+    _publishedMediaPath = mediaPath;
+    _revision += 1;
+    final durationUs = _status?.durationUs ?? 0;
+    _session.publish(
+      revision: _revision,
+      durationUs: durationUs,
+      videoTrackCount: mediaPath == null ? 0 : 1,
+      audioTrackCount: mediaPath == null ? 0 : 1,
+    );
+    _status = _session.status();
+    _telemetry = _session.telemetry();
+  }
+
+  void _refreshStatus() {
+    if (!mounted) return;
+    try {
+      final status = _session.status();
+      final telemetry = _session.telemetry();
+      setState(() {
+        _status = status;
+        _telemetry = telemetry;
+      });
+    } catch (_) {
+      // The parent owns application-level error reporting. A disposed native
+      // timeline can only occur during teardown, so there is nothing to show.
+    }
+  }
+
+  void _playPause() {
+    final status = _status;
+    if (status?.playbackState == DigitorPlaybackState.playing) {
+      _session.pause();
+    } else {
+      _session.play();
+    }
+    _refreshStatus();
+  }
+
+  void _stop() {
+    _session.stop();
+    _refreshStatus();
+  }
+
+  void _seek(double fraction) {
+    final durationUs = _status?.durationUs ?? 0;
+    if (durationUs <= 0) return;
+    _session.seek((durationUs * fraction.clamp(0.0, 1.0)).round());
+    _refreshStatus();
+  }
+
+  @override
+  void dispose() {
+    _poller?.cancel();
+    _session.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final status = _status;
+    final durationUs = status?.durationUs ?? 0;
+    final positionUs = status?.positionUs ?? 0;
+    final progress = durationUs <= 0
+        ? 0.0
+        : (positionUs / durationUs).clamp(0.0, 1.0).toDouble();
+    final playing = status?.playbackState == DigitorPlaybackState.playing;
+    final hasMedia = widget.gateway.mediaPath != null;
+
     return Container(
-      height: 64,
+      height: 96,
       margin: const EdgeInsets.symmetric(horizontal: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0x0AFFFFFF),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(
+      child: Column(
         children: <Widget>[
-          const Icon(Icons.play_arrow),
-          const SizedBox(width: 8),
+          Row(
+            children: <Widget>[
+              IconButton(
+                tooltip: playing ? 'Pause' : 'Play',
+                onPressed: hasMedia ? _playPause : null,
+                icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+              ),
+              IconButton(
+                tooltip: 'Stop',
+                onPressed: hasMedia ? _stop : null,
+                icon: const Icon(Icons.stop),
+              ),
+              Expanded(
+                child: Slider(
+                  value: progress,
+                  onChanged: hasMedia && durationUs > 0 ? _seek : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(_timecode(positionUs)),
+              const Text(' / '),
+              Text(durationUs > 0 ? _timecode(durationUs) : '--:--:--.---'),
+            ],
+          ),
           Expanded(
-            child: LinearProgressIndicator(
-              value: gateway.mediaPath == null ? 0 : 0.01,
-              minHeight: 4,
+            child: Row(
+              children: <Widget>[
+                const SizedBox(
+                  width: 56,
+                  child: Text('V1 / A1', style: TextStyle(fontSize: 11)),
+                ),
+                Expanded(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(5),
+                      color: hasMedia
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Colors.white10,
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          hasMedia
+                              ? '${_basename(widget.gateway.mediaPath!)} • Engine timeline r${status?.revision ?? _revision}'
+                              : 'Import media to publish the Engine timeline',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'pub ${_telemetry?.publications ?? 0} • seek ${_telemetry?.seekCommands ?? 0}',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 12),
-          Text('Node ${gateway.selectedNode ?? '-'}'),
         ],
       ),
     );
+  }
+
+  static String _basename(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized.split('/').last;
+  }
+
+  static String _timecode(int microseconds) {
+    final value = Duration(microseconds: microseconds < 0 ? 0 : microseconds);
+    final hours = value.inHours.toString().padLeft(2, '0');
+    final minutes = (value.inMinutes % 60).toString().padLeft(2, '0');
+    final seconds = (value.inSeconds % 60).toString().padLeft(2, '0');
+    final millis = (value.inMilliseconds % 1000).toString().padLeft(3, '0');
+    return '$hours:$minutes:$seconds.$millis';
   }
 }
 
