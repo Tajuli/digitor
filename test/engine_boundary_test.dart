@@ -12,7 +12,11 @@ void main() {
       RegExp(r'ffmpeg_kit', caseSensitive: false),
       RegExp(r'androidx\.media3', caseSensitive: false),
       RegExp(r'package:video_compress', caseSensitive: false),
-      RegExp(r'DigitorProductionMediaSource\.open\('),
+      RegExp(r'DigitorProductionMediaSource'),
+      RegExp(r'DigitorProductionMediaPipeline'),
+      RegExp(r'DigitorProductionHost'),
+      RegExp(r'DigitorFlutterPlatformHost'),
+      RegExp(r'DigitorNodeGraph\b'),
     ];
 
     final violations = <String>[];
@@ -30,20 +34,23 @@ void main() {
       violations,
       isEmpty,
       reason:
-          'Digitor must not own media/render processing. Route it through '
-          'DigitorEngine instead.\n${violations.join('\n')}',
+          'Digitor must not own decoder/render/graph/platform-host processing. '
+          'Route it through the high-level DigitorEngine workspace.\n'
+          '${violations.join('\n')}',
     );
   });
 
-  test('DigitorEngine gateway is the app processing boundary', () {
+  test('Digitor gateway uses the high-level engine workspace only', () {
     final gateway = File('lib/engine/digitor_engine_gateway.dart');
     expect(gateway.existsSync(), isTrue);
 
     final source = gateway.readAsStringSync();
     expect(source, contains('package:digitor_engine_ffi/digitor_engine_ffi.dart'));
-    expect(source, contains('DigitorNodeGraph'));
-    expect(source, contains('DigitorProductionMediaPipeline'));
-    expect(source, contains('DigitorFlutterPlatformHost'));
-    expect(source, isNot(contains('DigitorProductionMediaSource.open(')));
+    expect(source, contains('DigitorEditorWorkspace'));
+    expect(source, isNot(contains('DigitorProductionMediaSource')));
+    expect(source, isNot(contains('DigitorProductionMediaPipeline')));
+    expect(source, isNot(contains('DigitorProductionHost')));
+    expect(source, isNot(contains('DigitorFlutterPlatformHost')));
+    expect(source, isNot(contains('DigitorNodeGraph')));
   });
 }
