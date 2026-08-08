@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:flutter/material.dart';
 
@@ -30,32 +32,36 @@ class _EditorScreenState extends State<EditorScreen> {
   late final DigitorEngineGateway gateway;
   EditorTool tool = EditorTool.nodes;
 
-  double exposure = 0;
-  double contrast = 0;
-  double saturation = 0;
-  double temperature = 0;
-  double tint = 0;
-  double highlights = 0;
-  double shadows = 0;
-  double hue = 0;
-  double colorBoost = 0;
+  final Map<String, double> correction = <String, double>{
+    'Exposure': 0,
+    'Contrast': 0,
+    'Saturation': 0,
+    'Temperature': 0,
+    'Tint': 0,
+    'Highlights': 0,
+    'Shadows': 0,
+    'Hue': 0,
+    'Color Boost': 0,
+  };
+  final Map<String, double> primary = <String, double>{
+    'Lift': 0,
+    'Gamma': 0,
+    'Gain': 0,
+    'Offset': 0,
+  };
+  final Map<String, double> log = <String, double>{
+    'Shadows': 0,
+    'Midtones': 0,
+    'Highlights': 0,
+    'Global': 0,
+  };
 
-  double lift = 0;
-  double gamma = 0;
-  double gain = 0;
-  double offset = 0;
-
-  double logShadows = 0;
-  double logMidtones = 0;
-  double logHighlights = 0;
-  double logGlobal = 0;
-
-  double curveMid = 0;
+  double curveMidpoint = 0;
   double hueLow = 0;
   double hueHigh = 1;
+  DigitorNodeEffectType effectType = DigitorNodeEffectType.vignette;
   double effectAmount = 0.15;
   double effectRadius = 0.2;
-  DigitorNodeEffectType effectType = DigitorNodeEffectType.vignette;
   DigitorPowerWindowShape windowShape = DigitorPowerWindowShape.ellipse;
   double windowWidth = 0.75;
   double windowHeight = 0.75;
@@ -65,7 +71,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
     gateway = DigitorEngineGateway()..addListener(_refresh);
-    gateway.initialize();
+    unawaited(gateway.initialize());
   }
 
   void _refresh() {
@@ -85,12 +91,10 @@ class _EditorScreenState extends State<EditorScreen> {
       appBar: AppBar(
         title: const Text('Digitor'),
         actions: <Widget>[
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(child: Text(gateway.rendererLabel)),
-          ),
+          Center(child: Text(gateway.rendererLabel)),
+          const SizedBox(width: 8),
           IconButton(
-            tooltip: 'Open media',
+            tooltip: 'Import video',
             onPressed: gateway.ready ? gateway.pickMedia : null,
             icon: const Icon(Icons.video_file_outlined),
           ),
@@ -98,34 +102,24 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
       body: Column(
         children: <Widget>[
-          if (gateway.error != null)
+          if (gateway.error case final message?)
             MaterialBanner(
-              content: Text(gateway.error!),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: () {},
-                  child: const Text('Engine status'),
-                ),
-              ],
+              content: Text(message),
+              actions: const <Widget>[SizedBox.shrink()],
             ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: _PreviewPanel(gateway: gateway),
-            ),
-          ),
+          Expanded(child: _PreviewPanel(gateway: gateway)),
           _TimelineStrip(gateway: gateway),
-          _ToolBar(
+          _ToolSelector(
             selected: tool,
             onSelected: (value) => setState(() => tool = value),
           ),
-          SizedBox(height: 270, child: _buildToolPanel()),
+          SizedBox(height: 270, child: _toolPanel()),
         ],
       ),
     );
   }
 
-  Widget _buildToolPanel() {
+  Widget _toolPanel() {
     if (!gateway.ready) {
       return Center(
         child: gateway.initializing
@@ -133,93 +127,79 @@ class _EditorScreenState extends State<EditorScreen> {
             : const Text('DigitorEngine unavailable'),
       );
     }
-    switch (tool) {
-      case EditorTool.nodes:
-        return _NodesPanel(gateway: gateway);
-      case EditorTool.correction:
-        return _ControlPanel(
+
+    return switch (tool) {
+      EditorTool.nodes => _NodesPanel(gateway: gateway),
+      EditorTool.correction => _SliderPanel(
           title: 'Correction',
-          controls: <Widget>[
-            _slider('Exposure', exposure, -1, 1, (v) => exposure = v),
-            _slider('Contrast', contrast, -1, 1, (v) => contrast = v),
-            _slider('Saturation', saturation, -1, 1, (v) => saturation = v),
-            _slider('Temperature', temperature, -1, 1, (v) => temperature = v),
-            _slider('Tint', tint, -1, 1, (v) => tint = v),
-            _slider('Highlights', highlights, -1, 1, (v) => highlights = v),
-            _slider('Shadows', shadows, -1, 1, (v) => shadows = v),
-            _slider('Hue', hue, -1, 1, (v) => hue = v),
-            _slider('Color Boost', colorBoost, -1, 1, (v) => colorBoost = v),
-          ],
+          values: correction,
+          min: -1,
+          max: 1,
+          onChanged: (key, value) => setState(() => correction[key] = value),
           onApply: () => gateway.applyCorrection(
-            exposure: exposure,
-            contrast: contrast,
-            saturation: saturation,
-            temperature: temperature,
-            tint: tint,
-            highlights: highlights,
-            shadows: shadows,
-            hue: hue,
-            colorBoost: colorBoost,
+            exposure: correction['Exposure']!,
+            contrast: correction['Contrast']!,
+            saturation: correction['Saturation']!,
+            temperature: correction['Temperature']!,
+            tint: correction['Tint']!,
+            highlights: correction['Highlights']!,
+            shadows: correction['Shadows']!,
+            hue: correction['Hue']!,
+            colorBoost: correction['Color Boost']!,
           ),
-        );
-      case EditorTool.primary:
-        return _ControlPanel(
+        ),
+      EditorTool.primary => _SliderPanel(
           title: 'Primary Wheels • master channels',
-          controls: <Widget>[
-            _slider('Lift', lift, -1, 1, (v) => lift = v),
-            _slider('Gamma', gamma, -1, 1, (v) => gamma = v),
-            _slider('Gain', gain, -1, 1, (v) => gain = v),
-            _slider('Offset', offset, -1, 1, (v) => offset = v),
-          ],
+          values: primary,
+          min: -1,
+          max: 1,
+          onChanged: (key, value) => setState(() => primary[key] = value),
           onApply: () => gateway.applyPrimaryWheels(
-            lift: lift,
-            gamma: gamma,
-            gain: gain,
-            offset: offset,
+            lift: primary['Lift']!,
+            gamma: primary['Gamma']!,
+            gain: primary['Gain']!,
+            offset: primary['Offset']!,
           ),
-        );
-      case EditorTool.log:
-        return _ControlPanel(
+        ),
+      EditorTool.log => _SliderPanel(
           title: 'Log Wheels • master channels',
-          controls: <Widget>[
-            _slider('Shadows', logShadows, -1, 1, (v) => logShadows = v),
-            _slider('Midtones', logMidtones, -1, 1, (v) => logMidtones = v),
-            _slider('Highlights', logHighlights, -1, 1, (v) => logHighlights = v),
-            _slider('Global', logGlobal, -1, 1, (v) => logGlobal = v),
-          ],
+          values: log,
+          min: -1,
+          max: 1,
+          onChanged: (key, value) => setState(() => log[key] = value),
           onApply: () => gateway.applyLogWheels(
-            shadows: logShadows,
-            midtones: logMidtones,
-            highlights: logHighlights,
-            global: logGlobal,
+            shadows: log['Shadows']!,
+            midtones: log['Midtones']!,
+            highlights: log['Highlights']!,
+            global: log['Global']!,
           ),
-        );
-      case EditorTool.curves:
-        return _ControlPanel(
-          title: 'RGB Curves',
-          controls: <Widget>[
-            _slider('Master midpoint', curveMid, -0.45, 0.45, (v) => curveMid = v),
-          ],
-          onApply: () => gateway.applyRgbCurve(curveMid),
-        );
-      case EditorTool.qualifier:
-        return _ControlPanel(
-          title: 'HSL Qualifier',
-          controls: <Widget>[
-            _slider('Hue low', hueLow, 0, 1, (v) => hueLow = v),
-            _slider('Hue high', hueHigh, 0, 1, (v) => hueHigh = v),
-          ],
-          onApply: () => gateway.applyQualifier(hueLow: hueLow, hueHigh: hueHigh),
-        );
-      case EditorTool.lut:
-        return _ActionPanel(
+        ),
+      EditorTool.curves => _SingleSliderPanel(
+          title: 'RGB Curves • master midpoint',
+          value: curveMidpoint,
+          min: -0.45,
+          max: 0.45,
+          onChanged: (value) => setState(() => curveMidpoint = value),
+          onApply: () => gateway.applyRgbCurve(curveMidpoint),
+        ),
+      EditorTool.qualifier => _QualifierPanel(
+          low: hueLow,
+          high: hueHigh,
+          onLow: (value) => setState(() => hueLow = value),
+          onHigh: (value) => setState(() => hueHigh = value),
+          onApply: () => gateway.applyQualifier(
+            hueLow: hueLow,
+            hueHigh: hueHigh,
+          ),
+        ),
+      EditorTool.lut => _ActionPanel(
           title: 'LUT',
-          description: 'LUT operations are stored in the selected DigitorEngine node.',
-          button: 'Add identity 1D LUT',
+          description:
+              'LUT data is attached to the selected native DigitorEngine node.',
+          label: 'Add identity LUT',
           onPressed: gateway.applyIdentityLut,
-        );
-      case EditorTool.effects:
-        return _EffectsPanel(
+        ),
+      EditorTool.effects => _EffectsPanel(
           type: effectType,
           amount: effectAmount,
           radius: effectRadius,
@@ -231,9 +211,8 @@ class _EditorScreenState extends State<EditorScreen> {
             amount: effectAmount,
             radius: effectRadius,
           ),
-        );
-      case EditorTool.window:
-        return _WindowPanel(
+        ),
+      EditorTool.window => _WindowPanel(
           shape: windowShape,
           width: windowWidth,
           height: windowHeight,
@@ -248,39 +227,14 @@ class _EditorScreenState extends State<EditorScreen> {
             height: windowHeight,
             feather: windowFeather,
           ),
-        );
-      case EditorTool.export:
-        return const _ActionPanel(
+        ),
+      EditorTool.export => const _ActionPanel(
           title: 'Export',
           description:
-              'Export is intentionally not implemented in Dart or Media3. The next integration step binds DigitorEngine production export to the same node-graph revision used by preview.',
-          button: 'Engine-only export',
-        );
-    }
-  }
-
-  Widget _slider(
-    String label,
-    double value,
-    double min,
-    double max,
-    ValueChanged<double> onChanged,
-  ) {
-    return SizedBox(
-      width: 210,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text('$label  ${value.toStringAsFixed(2)}'),
-          Slider(
-            value: value.clamp(min, max),
-            min: min,
-            max: max,
-            onChanged: (next) => setState(() => onChanged(next)),
-          ),
-        ],
-      ),
-    );
+              'No Dart or Media3 export path exists. Production export will be bound to the exact DigitorEngine node-graph revision used by preview.',
+          label: 'Engine-only export',
+        ),
+    };
   }
 }
 
@@ -290,32 +244,30 @@ class _PreviewPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(
-                gateway.mediaPath == null ? Icons.movie_outlined : Icons.movie,
-                size: 52,
-                color: Colors.white70,
-              ),
+              const Icon(Icons.movie_outlined, size: 52),
               const SizedBox(height: 12),
               Text(gateway.mediaLabel, textAlign: TextAlign.center),
               const SizedBox(height: 6),
-              Text(gateway.hostLabel, style: Theme.of(context).textTheme.bodySmall),
+              Text(gateway.hostLabel),
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: gateway.ready ? gateway.pickMedia : null,
                 icon: const Icon(Icons.add),
-                label: Text(gateway.mediaPath == null ? 'Import video' : 'Replace video'),
+                label: Text(
+                  gateway.mediaPath == null ? 'Import video' : 'Replace video',
+                ),
               ),
             ],
           ),
@@ -332,11 +284,11 @@ class _TimelineStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 72,
+      height: 64,
       margin: const EdgeInsets.symmetric(horizontal: 12),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
+        color: const Color(0x0AFFFFFF),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
@@ -357,8 +309,8 @@ class _TimelineStrip extends StatelessWidget {
   }
 }
 
-class _ToolBar extends StatelessWidget {
-  const _ToolBar({required this.selected, required this.onSelected});
+class _ToolSelector extends StatelessWidget {
+  const _ToolSelector({required this.selected, required this.onSelected});
   final EditorTool selected;
   final ValueChanged<EditorTool> onSelected;
 
@@ -391,15 +343,10 @@ class _NodesPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            'Engine Node Graph',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -414,29 +361,25 @@ class _NodesPanel extends StatelessWidget {
                 icon: const Icon(Icons.call_split),
                 label: const Text('Parallel'),
               ),
-              OutlinedButton.icon(
+              OutlinedButton(
                 onPressed: gateway.clearSelectedOperations,
-                icon: const Icon(Icons.restart_alt),
-                label: const Text('Clear operations'),
+                child: const Text('Clear operations'),
               ),
               OutlinedButton.icon(
                 onPressed: gateway.removeSelectedNode,
                 icon: const Icon(Icons.delete_outline),
-                label: const Text('Delete node'),
+                label: const Text('Delete'),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           Text(
-            'Selected: ${gateway.selectedNode}   Graph revision: ${gateway.graph.graphRevision}   Parameter revision: ${gateway.graph.parameterRevision}',
+            'Selected ${gateway.selectedNode} • graph ${gateway.graph.graphRevision} • parameters ${gateway.graph.parameterRevision}',
           ),
           const SizedBox(height: 8),
           Expanded(
             child: SingleChildScrollView(
-              child: SelectableText(
-                gateway.graph.json,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              child: SelectableText(gateway.graph.json),
             ),
           ),
         ],
@@ -445,65 +388,106 @@ class _NodesPanel extends StatelessWidget {
   }
 }
 
-class _ControlPanel extends StatelessWidget {
-  const _ControlPanel({
+typedef NamedValueChanged = void Function(String key, double value);
+
+class _SliderPanel extends StatelessWidget {
+  const _SliderPanel({
     required this.title,
-    required this.controls,
+    required this.values,
+    required this.min,
+    required this.max,
+    required this.onChanged,
     required this.onApply,
   });
+
   final String title;
-  final List<Widget> controls;
+  final Map<String, double> values;
+  final double min;
+  final double max;
+  final NamedValueChanged onChanged;
   final VoidCallback onApply;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium)),
-              FilledButton(onPressed: onApply, child: const Text('Apply to node')),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Wrap(spacing: 8, runSpacing: 8, children: controls),
-            ),
-          ),
-        ],
+    return _PanelShell(
+      title: title,
+      onApply: onApply,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: values.entries
+            .map(
+              (entry) => _LabeledSlider(
+                label: entry.key,
+                value: entry.value,
+                min: min,
+                max: max,
+                onChanged: (value) => onChanged(entry.key, value),
+              ),
+            )
+            .toList(growable: false),
       ),
     );
   }
 }
 
-class _ActionPanel extends StatelessWidget {
-  const _ActionPanel({
+class _SingleSliderPanel extends StatelessWidget {
+  const _SingleSliderPanel({
     required this.title,
-    required this.description,
-    required this.button,
-    this.onPressed,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    required this.onApply,
   });
+
   final String title;
-  final String description;
-  final String button;
-  final VoidCallback? onPressed;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final VoidCallback onApply;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return _PanelShell(
+      title: title,
+      onApply: onApply,
+      child: _LabeledSlider(
+        label: 'Value',
+        value: value,
+        min: min,
+        max: max,
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+class _QualifierPanel extends StatelessWidget {
+  const _QualifierPanel({
+    required this.low,
+    required this.high,
+    required this.onLow,
+    required this.onHigh,
+    required this.onApply,
+  });
+
+  final double low;
+  final double high;
+  final ValueChanged<double> onLow;
+  final ValueChanged<double> onHigh;
+  final VoidCallback onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PanelShell(
+      title: 'HSL Qualifier',
+      onApply: onApply,
+      child: Wrap(
         children: <Widget>[
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          Text(description),
-          const SizedBox(height: 18),
-          FilledButton(onPressed: onPressed, child: Text(button)),
+          _LabeledSlider(label: 'Hue low', value: low, onChanged: onLow),
+          _LabeledSlider(label: 'Hue high', value: high, onChanged: onHigh),
         ],
       ),
     );
@@ -520,6 +504,7 @@ class _EffectsPanel extends StatelessWidget {
     required this.onRadius,
     required this.onApply,
   });
+
   final DigitorNodeEffectType type;
   final double amount;
   final double radius;
@@ -530,33 +515,36 @@ class _EffectsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
+    return _PanelShell(
+      title: 'Effects',
+      onApply: onApply,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              DropdownButton<DigitorNodeEffectType>(
-                value: type,
-                items: DigitorNodeEffectType.values
-                    .map((value) => DropdownMenuItem(value: value, child: Text(value.name)))
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) onType(value);
-                },
-              ),
-              Expanded(
-                child: Slider(value: amount, min: 0, max: 1, onChanged: onAmount),
-              ),
-              Text('Amount ${amount.toStringAsFixed(2)}'),
-              Expanded(
-                child: Slider(value: radius, min: 0, max: 1, onChanged: onRadius),
-              ),
-              Text('Radius ${radius.toStringAsFixed(2)}'),
-            ],
+          DropdownButton<DigitorNodeEffectType>(
+            value: type,
+            items: DigitorNodeEffectType.values
+                .map(
+                  (value) => DropdownMenuItem<DigitorNodeEffectType>(
+                    value: value,
+                    child: Text(value.name),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: (value) {
+              if (value != null) onType(value);
+            },
           ),
-          const SizedBox(height: 12),
-          FilledButton(onPressed: onApply, child: const Text('Apply effect to node')),
+          _LabeledSlider(
+            label: 'Amount',
+            value: amount,
+            onChanged: onAmount,
+          ),
+          _LabeledSlider(
+            label: 'Radius',
+            value: radius,
+            onChanged: onRadius,
+          ),
         ],
       ),
     );
@@ -575,6 +563,7 @@ class _WindowPanel extends StatelessWidget {
     required this.onFeather,
     required this.onApply,
   });
+
   final DigitorPowerWindowShape shape;
   final double width;
   final double height;
@@ -587,47 +576,136 @@ class _WindowPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
+    return _PanelShell(
+      title: 'Power Window',
+      onApply: onApply,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: <Widget>[
           DropdownButton<DigitorPowerWindowShape>(
             value: shape,
             items: DigitorPowerWindowShape.values
-                .map((value) => DropdownMenuItem(value: value, child: Text(value.name)))
-                .toList(),
+                .map(
+                  (value) => DropdownMenuItem<DigitorPowerWindowShape>(
+                    value: value,
+                    child: Text(value.name),
+                  ),
+                )
+                .toList(growable: false),
             onChanged: (value) {
               if (value != null) onShape(value);
             },
           ),
-          _InlineSlider(label: 'Width', value: width, onChanged: onWidth),
-          _InlineSlider(label: 'Height', value: height, onChanged: onHeight),
-          _InlineSlider(label: 'Feather', value: feather, onChanged: onFeather),
-          FilledButton(onPressed: onApply, child: const Text('Apply window to node')),
+          _LabeledSlider(label: 'Width', value: width, onChanged: onWidth),
+          _LabeledSlider(label: 'Height', value: height, onChanged: onHeight),
+          _LabeledSlider(
+            label: 'Feather',
+            value: feather,
+            onChanged: onFeather,
+          ),
         ],
       ),
     );
   }
 }
 
-class _InlineSlider extends StatelessWidget {
-  const _InlineSlider({
+class _PanelShell extends StatelessWidget {
+  const _PanelShell({
+    required this.title,
+    required this.child,
+    required this.onApply,
+  });
+
+  final String title;
+  final Widget child;
+  final VoidCallback onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+              ),
+              FilledButton(onPressed: onApply, child: const Text('Apply to node')),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(child: SingleChildScrollView(child: child)),
+        ],
+      ),
+    );
+  }
+}
+
+class _LabeledSlider extends StatelessWidget {
+  const _LabeledSlider({
     required this.label,
     required this.value,
     required this.onChanged,
+    this.min = 0,
+    this.max = 1,
   });
+
   final String label;
   final double value;
+  final double min;
+  final double max;
   final ValueChanged<double> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        SizedBox(width: 70, child: Text(label)),
-        Expanded(child: Slider(value: value, min: 0, max: 1, onChanged: onChanged)),
-        SizedBox(width: 45, child: Text(value.toStringAsFixed(2))),
-      ],
+    final safeValue = value.clamp(min, max).toDouble();
+    return SizedBox(
+      width: 220,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text('$label  ${safeValue.toStringAsFixed(2)}'),
+          Slider(
+            value: safeValue,
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionPanel extends StatelessWidget {
+  const _ActionPanel({
+    required this.title,
+    required this.description,
+    required this.label,
+    this.onPressed,
+  });
+
+  final String title;
+  final String description;
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Text(description),
+          const SizedBox(height: 18),
+          FilledButton(onPressed: onPressed, child: Text(label)),
+        ],
+      ),
     );
   }
 }
