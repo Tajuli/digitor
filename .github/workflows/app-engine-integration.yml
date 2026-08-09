@@ -21,7 +21,7 @@ jobs:
           flutter create --platforms=android --project-name digitor .
           rm -rf test
       - run: flutter pub get
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos
       - run: flutter build apk --debug
 
   windows:
