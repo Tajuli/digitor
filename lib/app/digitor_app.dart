@@ -22,10 +22,6 @@ class _DigitorAppState extends State<DigitorApp> {
         brightness: Brightness.dark,
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFF121212),
-        cardTheme: const CardThemeData(
-          margin: EdgeInsets.zero,
-          elevation: 0,
-        ),
         dividerTheme: const DividerThemeData(space: 1, thickness: 1),
         visualDensity: VisualDensity.compact,
       ),

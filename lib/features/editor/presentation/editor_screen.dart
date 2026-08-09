@@ -8,7 +8,6 @@ import '../../../core/engine/engine_gateway.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.engine});
-
   final EngineGateway engine;
 
   @override
@@ -19,11 +18,13 @@ class _EditorScreenState extends State<EditorScreen> {
   EngineWorkspace _workspace = EngineWorkspace.media;
   EngineSnapshot _snapshot = EngineSnapshot.disconnected;
   EngineProgress? _progress;
-  List<EngineCapability> _capabilities = const <EngineCapability>[];
+  List<EngineCapability> _capabilities = const [];
   String? _hostError;
-  final Map<String, double> _sliderValues = <String, double>{};
-  final Map<String, bool> _toggleValues = <String, bool>{};
-  final Map<String, String> _choiceValues = <String, String>{};
+
+  final Map<String, double> _sliders = {};
+  final Map<String, bool> _toggles = {};
+  final Map<String, String> _choices = {};
+
   StreamSubscription<EngineSnapshot>? _snapshotSub;
   StreamSubscription<EngineProgress>? _progressSub;
   StreamSubscription<EngineEvent>? _eventSub;
@@ -31,26 +32,27 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    _connectEngine();
+    _connect();
   }
 
-  Future<void> _connectEngine() async {
+  Future<void> _connect() async {
+    await _snapshotSub?.cancel();
+    await _progressSub?.cancel();
+    await _eventSub?.cancel();
+
     _snapshotSub = widget.engine.snapshots.listen(
       (value) {
         if (mounted) setState(() => _snapshot = value);
       },
-      onError: _rememberHostError,
+      onError: _setHostError,
     );
     _progressSub = widget.engine.progress.listen(
       (value) {
         if (mounted) setState(() => _progress = value);
       },
-      onError: _rememberHostError,
+      onError: _setHostError,
     );
-    _eventSub = widget.engine.events.listen(
-      (_) {},
-      onError: _rememberHostError,
-    );
+    _eventSub = widget.engine.events.listen((_) {}, onError: _setHostError);
 
     try {
       await widget.engine.initialize();
@@ -61,15 +63,15 @@ class _EditorScreenState extends State<EditorScreen> {
         _hostError = null;
       });
     } on MissingPluginException catch (error) {
-      _rememberHostError(error);
+      _setHostError(error);
     } on PlatformException catch (error) {
-      _rememberHostError(error);
+      _setHostError(error);
     } catch (error) {
-      _rememberHostError(error);
+      _setHostError(error);
     }
   }
 
-  void _rememberHostError(Object error) {
+  void _setHostError(Object error) {
     if (!mounted) return;
     setState(() {
       _snapshot = EngineSnapshot.disconnected;
@@ -77,29 +79,25 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
-  Future<void> _dispatch(
-    String featureId,
-    String controlId, [
-    Object? value,
-  ]) async {
+  Future<void> _dispatch(String feature, String control, [Object? value]) async {
     try {
       await widget.engine.dispatch(
         EngineIntent(
-          '$featureId.$controlId',
-          value == null ? const <String, Object?>{} : <String, Object?>{'value': value},
+          '$feature.$control',
+          value == null ? const {} : <String, Object?>{'value': value},
         ),
       );
     } catch (error) {
-      _rememberHostError(error);
+      _setHostError(error);
     }
   }
 
   Future<void> _refreshCapabilities() async {
     try {
-      final capabilities = await widget.engine.discoverCapabilities();
-      if (mounted) setState(() => _capabilities = capabilities);
+      final value = await widget.engine.discoverCapabilities();
+      if (mounted) setState(() => _capabilities = value);
     } catch (error) {
-      _rememberHostError(error);
+      _setHostError(error);
     }
   }
 
@@ -114,85 +112,68 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final features = engineFeatureCatalog
-        .where((feature) => feature.workspace == _workspace)
-        .toList(growable: false);
-
+    final features = engineFeatureCatalog.where((f) => f.workspace == _workspace).toList(growable: false);
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
             _TopBar(
-              snapshot: _snapshot,
+              connected: _snapshot.connected,
               progress: _progress,
               onImport: () => _dispatch('media.import', 'requestPicker'),
+              onSave: () => _dispatch('project.lifecycle', 'save'),
               onUndo: () => _dispatch('project.history', 'undo'),
               onRedo: () => _dispatch('project.history', 'redo'),
-              onSave: () => _dispatch('project.lifecycle', 'save'),
               onExport: () => setState(() => _workspace = EngineWorkspace.export),
             ),
-            if (_hostError != null)
-              _HostBanner(message: _hostError!, onRetry: _connectEngine),
+            if (_hostError != null) _HostBanner(message: _hostError!, onRetry: _connect),
             const Divider(height: 1),
             Expanded(
               child: Row(
                 children: [
-                  _WorkspaceRail(
-                    selected: _workspace,
-                    onSelected: (value) => setState(() => _workspace = value),
-                  ),
+                  _WorkspaceRail(selected: _workspace, onSelected: (value) => setState(() => _workspace = value)),
                   const VerticalDivider(width: 1),
                   SizedBox(
-                    width: 245,
+                    width: 235,
                     child: _FeatureBrowser(
                       workspace: _workspace,
                       features: features,
                       capabilities: _capabilities,
-                      onRefreshCapabilities: _refreshCapabilities,
+                      onRefresh: _refreshCapabilities,
                     ),
                   ),
                   const VerticalDivider(width: 1),
                   Expanded(
                     child: Column(
                       children: [
-                        Expanded(
-                          child: _MainWorkspace(
-                            workspace: _workspace,
-                            snapshot: _snapshot,
-                            capabilities: _capabilities,
-                            onDispatch: _dispatch,
-                          ),
-                        ),
+                        Expanded(child: _MainCanvas(workspace: _workspace, snapshot: _snapshot, capabilities: _capabilities, onDispatch: _dispatch)),
                         const Divider(height: 1),
-                        _TransportBar(
-                          snapshot: _snapshot,
-                          onCommand: (id) => _dispatch('playback.transport', id),
-                        ),
+                        _Transport(snapshot: _snapshot, onCommand: (id) => _dispatch('playback.transport', id)),
                         const Divider(height: 1),
-                        const SizedBox(height: 210, child: _Timeline()),
+                        const SizedBox(height: 210, child: _TimelineSurface()),
                       ],
                     ),
                   ),
                   const VerticalDivider(width: 1),
                   SizedBox(
-                    width: 310,
+                    width: 305,
                     child: _Inspector(
                       workspace: _workspace,
                       features: features,
-                      sliderValues: _sliderValues,
-                      toggleValues: _toggleValues,
-                      choiceValues: _choiceValues,
+                      sliders: _sliders,
+                      toggles: _toggles,
+                      choices: _choices,
                       onAction: _dispatch,
                       onSlider: (feature, control, value) {
-                        setState(() => _sliderValues['$feature.$control'] = value);
+                        setState(() => _sliders['$feature.$control'] = value);
                         _dispatch(feature, control, value);
                       },
                       onToggle: (feature, control, value) {
-                        setState(() => _toggleValues['$feature.$control'] = value);
+                        setState(() => _toggles['$feature.$control'] = value);
                         _dispatch(feature, control, value);
                       },
                       onChoice: (feature, control, value) {
-                        setState(() => _choiceValues['$feature.$control'] = value);
+                        setState(() => _choices['$feature.$control'] = value);
                         _dispatch(feature, control, value);
                       },
                     ),
@@ -200,11 +181,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 ],
               ),
             ),
-            _StatusBar(
-              snapshot: _snapshot,
-              knownFeatures: engineFeatureCatalog.length,
-              runtimeCapabilities: _capabilities,
-            ),
+            _StatusBar(snapshot: _snapshot, capabilities: _capabilities),
           ],
         ),
       ),
@@ -214,89 +191,54 @@ class _EditorScreenState extends State<EditorScreen> {
 
 class _TopBar extends StatelessWidget {
   const _TopBar({
-    required this.snapshot,
+    required this.connected,
     required this.progress,
     required this.onImport,
+    required this.onSave,
     required this.onUndo,
     required this.onRedo,
-    required this.onSave,
     required this.onExport,
   });
-
-  final EngineSnapshot snapshot;
+  final bool connected;
   final EngineProgress? progress;
   final VoidCallback onImport;
+  final VoidCallback onSave;
   final VoidCallback onUndo;
   final VoidCallback onRedo;
-  final VoidCallback onSave;
   final VoidCallback onExport;
 
   @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 54,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: [
-            const Icon(Icons.movie_filter_outlined),
-            const SizedBox(width: 8),
-            Text('Digitor', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(width: 18),
-            _TopAction(icon: Icons.add_photo_alternate_outlined, label: 'Import', onPressed: onImport),
-            _TopAction(icon: Icons.undo, label: 'Undo', onPressed: onUndo),
-            _TopAction(icon: Icons.redo, label: 'Redo', onPressed: onRedo),
-            _TopAction(icon: Icons.save_outlined, label: 'Save', onPressed: onSave),
-            const Spacer(),
-            if (progress != null && progress!.fraction < 1)
-              SizedBox(
-                width: 170,
-                child: Row(
-                  children: [
-                    Expanded(child: LinearProgressIndicator(value: progress!.fraction)),
-                    const SizedBox(width: 8),
-                    Text('${(progress!.fraction * 100).round()}%'),
-                  ],
+  Widget build(BuildContext context) => SizedBox(
+        height: 54,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              const Icon(Icons.movie_filter_outlined),
+              const SizedBox(width: 8),
+              Text('Digitor', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(width: 18),
+              TextButton.icon(onPressed: onImport, icon: const Icon(Icons.add_photo_alternate_outlined, size: 18), label: const Text('Import')),
+              IconButton(onPressed: onUndo, icon: const Icon(Icons.undo), tooltip: 'Undo'),
+              IconButton(onPressed: onRedo, icon: const Icon(Icons.redo), tooltip: 'Redo'),
+              IconButton(onPressed: onSave, icon: const Icon(Icons.save_outlined), tooltip: 'Save'),
+              const Spacer(),
+              if (progress != null && progress!.fraction < 1.0)
+                SizedBox(
+                  width: 160,
+                  child: Row(children: [Expanded(child: LinearProgressIndicator(value: progress!.fraction)), const SizedBox(width: 8), Text('${(progress!.fraction * 100).round()}%')]),
                 ),
+              const SizedBox(width: 12),
+              Chip(
+                visualDensity: VisualDensity.compact,
+                avatar: Icon(connected ? Icons.check_circle : Icons.link_off, size: 16),
+                label: Text(connected ? 'Engine connected' : 'Host unavailable'),
               ),
-            const SizedBox(width: 12),
-            _ConnectionChip(connected: snapshot.connected),
-            const SizedBox(width: 12),
-            FilledButton.icon(
-              onPressed: onExport,
-              icon: const Icon(Icons.file_upload_outlined, size: 18),
-              label: const Text('Export'),
-            ),
-          ],
+              const SizedBox(width: 10),
+              FilledButton.icon(onPressed: onExport, icon: const Icon(Icons.file_upload_outlined, size: 18), label: const Text('Export')),
+            ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _TopAction extends StatelessWidget {
-  const _TopAction({required this.icon, required this.label, required this.onPressed});
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => TextButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-      );
-}
-
-class _ConnectionChip extends StatelessWidget {
-  const _ConnectionChip({required this.connected});
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) => Chip(
-        avatar: Icon(connected ? Icons.check_circle : Icons.link_off, size: 16),
-        label: Text(connected ? 'Engine connected' : 'Host unavailable'),
-        visualDensity: VisualDensity.compact,
       );
 }
 
@@ -306,13 +248,18 @@ class _HostBanner extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => MaterialBanner(
-        content: Text(
-          'DigitorEngine native host is not available. UI remains usable for inspection; media processing is intentionally not emulated in Dart.\n$message',
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        color: Theme.of(context).colorScheme.errorContainer,
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Native DigitorEngine host unavailable — no processing is emulated in Dart. $message', maxLines: 1, overflow: TextOverflow.ellipsis)),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
         ),
-        actions: [TextButton(onPressed: onRetry, child: const Text('Retry'))],
       );
 }
 
@@ -325,7 +272,7 @@ class _WorkspaceRail extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: 86,
         child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(vertical: 5),
           children: [
             for (final item in EngineWorkspace.values)
               Padding(
@@ -334,20 +281,12 @@ class _WorkspaceRail extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   onTap: () => onSelected(item),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 3),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(10),
-                      color: selected == item
-                          ? Theme.of(context).colorScheme.secondaryContainer
-                          : Colors.transparent,
+                      color: selected == item ? Theme.of(context).colorScheme.secondaryContainer : Colors.transparent,
                     ),
-                    child: Column(
-                      children: [
-                        Icon(item.icon, size: 20),
-                        const SizedBox(height: 4),
-                        Text(item.label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10)),
-                      ],
-                    ),
+                    child: Column(children: [Icon(item.icon, size: 20), const SizedBox(height: 3), Text(item.label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10))]),
                   ),
                 ),
               ),
@@ -357,40 +296,26 @@ class _WorkspaceRail extends StatelessWidget {
 }
 
 class _FeatureBrowser extends StatelessWidget {
-  const _FeatureBrowser({
-    required this.workspace,
-    required this.features,
-    required this.capabilities,
-    required this.onRefreshCapabilities,
-  });
-
+  const _FeatureBrowser({required this.workspace, required this.features, required this.capabilities, required this.onRefresh});
   final EngineWorkspace workspace;
   final List<EngineUiFeature> features;
   final List<EngineCapability> capabilities;
-  final VoidCallback onRefreshCapabilities;
+  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    final knownIds = engineFeatureCatalog.map((item) => item.id).toSet();
-    final unknown = capabilities.where((item) => !knownIds.contains(item.id)).toList(growable: false);
+    final known = engineFeatureCatalog.map((f) => f.id).toSet();
+    final runtimeOnly = capabilities.where((c) => !known.contains(c.id)).toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
-          child: Row(
-            children: [
-              Icon(workspace.icon, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text(workspace.label, style: Theme.of(context).textTheme.titleSmall)),
-              if (workspace == EngineWorkspace.engine)
-                IconButton(onPressed: onRefreshCapabilities, icon: const Icon(Icons.refresh, size: 18), tooltip: 'Refresh capabilities'),
-            ],
-          ),
+          padding: const EdgeInsets.fromLTRB(12, 12, 8, 8),
+          child: Row(children: [Icon(workspace.icon, size: 18), const SizedBox(width: 7), Expanded(child: Text(workspace.label, style: Theme.of(context).textTheme.titleSmall)), if (workspace == EngineWorkspace.engine) IconButton(onPressed: onRefresh, icon: const Icon(Icons.refresh, size: 18))]),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+            padding: const EdgeInsets.fromLTRB(7, 0, 7, 10),
             children: [
               for (final feature in features)
                 Card(
@@ -399,24 +324,18 @@ class _FeatureBrowser extends StatelessWidget {
                     dense: true,
                     title: Text(feature.title),
                     subtitle: Text(feature.summary, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    trailing: _CapabilityDot(id: feature.id, capabilities: capabilities),
+                    trailing: _CapabilityIcon(id: feature.id, capabilities: capabilities),
                   ),
                 ),
-              if (workspace == EngineWorkspace.engine && unknown.isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(8, 16, 8, 6),
-                  child: Text('Runtime-only capabilities'),
-                ),
-                for (final capability in unknown)
+              if (workspace == EngineWorkspace.engine && runtimeOnly.isNotEmpty) ...[
+                const Padding(padding: EdgeInsets.fromLTRB(8, 14, 8, 5), child: Text('Runtime-only capabilities')),
+                for (final capability in runtimeOnly)
                   ListTile(
                     dense: true,
                     leading: const Icon(Icons.extension_outlined, size: 18),
                     title: Text(capability.title),
                     subtitle: Text(capability.id),
-                    trailing: Icon(
-                      capability.supported ? Icons.check_circle_outline : Icons.block,
-                      size: 18,
-                    ),
+                    trailing: Icon(capability.supported ? Icons.check_circle_outline : Icons.block, size: 18),
                   ),
               ],
             ],
@@ -427,31 +346,21 @@ class _FeatureBrowser extends StatelessWidget {
   }
 }
 
-class _CapabilityDot extends StatelessWidget {
-  const _CapabilityDot({required this.id, required this.capabilities});
+class _CapabilityIcon extends StatelessWidget {
+  const _CapabilityIcon({required this.id, required this.capabilities});
   final String id;
   final List<EngineCapability> capabilities;
 
   @override
   Widget build(BuildContext context) {
-    final matches = capabilities.where((item) => item.id == id);
-    if (matches.isEmpty) return const Tooltip(message: 'Awaiting runtime report', child: Icon(Icons.circle_outlined, size: 12));
-    final supported = matches.first.supported;
-    return Tooltip(
-      message: supported ? 'Runtime supported' : 'Runtime unavailable',
-      child: Icon(supported ? Icons.check_circle : Icons.cancel_outlined, size: 14),
-    );
+    final match = capabilities.where((c) => c.id == id).toList(growable: false);
+    if (match.isEmpty) return const Icon(Icons.circle_outlined, size: 12);
+    return Icon(match.first.supported ? Icons.check_circle : Icons.cancel_outlined, size: 14);
   }
 }
 
-class _MainWorkspace extends StatelessWidget {
-  const _MainWorkspace({
-    required this.workspace,
-    required this.snapshot,
-    required this.capabilities,
-    required this.onDispatch,
-  });
-
+class _MainCanvas extends StatelessWidget {
+  const _MainCanvas({required this.workspace, required this.snapshot, required this.capabilities, required this.onDispatch});
   final EngineWorkspace workspace;
   final EngineSnapshot snapshot;
   final List<EngineCapability> capabilities;
@@ -460,9 +369,9 @@ class _MainWorkspace extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (workspace == EngineWorkspace.nodes) return _NodeCanvas(onDispatch: onDispatch);
-    if (workspace == EngineWorkspace.scopes) return const _ScopeCanvas();
-    if (workspace == EngineWorkspace.engine) return _EngineDashboard(snapshot: snapshot, capabilities: capabilities);
+    if (workspace == EngineWorkspace.scopes) return const _ScopesCanvas();
     if (workspace == EngineWorkspace.export) return _ExportCanvas(onDispatch: onDispatch);
+    if (workspace == EngineWorkspace.engine) return _EngineDashboard(snapshot: snapshot, capabilities: capabilities);
     return _Viewer(snapshot: snapshot, workspace: workspace);
   }
 }
@@ -481,25 +390,12 @@ class _Viewer extends StatelessWidget {
               child: Center(
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: Icon(Icons.play_circle_outline, size: 58, color: Colors.white24),
-                    ),
-                  ),
+                  child: ColoredBox(color: Colors.black, child: Center(child: Icon(Icons.play_circle_outline, size: 58, color: Colors.white24))),
                 ),
               ),
             ),
-            Positioned(
-              left: 14,
-              top: 12,
-              child: Text('${workspace.label} · DigitorEngine preview surface'),
-            ),
-            Positioned(
-              right: 14,
-              top: 12,
-              child: Text(snapshot.engineMessage ?? (snapshot.connected ? 'Ready' : 'Native texture pending')),
-            ),
+            Positioned(left: 14, top: 12, child: Text('${workspace.label} · DigitorEngine native preview')),
+            Positioned(right: 14, top: 12, child: Text(snapshot.engineMessage ?? (snapshot.connected ? 'Ready' : 'Texture host pending'))),
           ],
         ),
       );
@@ -512,27 +408,32 @@ class _NodeCanvas extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         color: const Color(0xFF101010),
-        padding: const EdgeInsets.all(18),
-        child: Stack(
+        padding: const EdgeInsets.all(16),
+        child: Column(
           children: [
-            Positioned.fill(child: CustomPaint(painter: _GridPainter())),
-            const Positioned(left: 42, top: 96, child: _NodeCard(title: 'Input', icon: Icons.input)),
-            const Positioned(left: 220, top: 96, child: _NodeCard(title: 'Serial 01', icon: Icons.tune)),
-            const Positioned(left: 410, top: 38, child: _NodeCard(title: 'Parallel A', icon: Icons.call_split)),
-            const Positioned(left: 410, top: 158, child: _NodeCard(title: 'Parallel B', icon: Icons.call_split)),
-            const Positioned(left: 600, top: 96, child: _NodeCard(title: 'Mixer', icon: Icons.merge_type)),
-            const Positioned(left: 785, top: 96, child: _NodeCard(title: 'Output', icon: Icons.output)),
-            Positioned(
-              left: 12,
-              bottom: 12,
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addSerial'), child: const Text('+ Serial')),
-                  FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addParallel'), child: const Text('+ Parallel')),
-                  FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addMixer'), child: const Text('+ Mixer')),
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: const [
+                  _NodeCard('Input', Icons.input),
+                  Icon(Icons.arrow_forward, color: Colors.white24),
+                  _NodeCard('Serial', Icons.tune),
+                  Icon(Icons.call_split, color: Colors.white24),
+                  _NodeCard('Parallel', Icons.alt_route),
+                  Icon(Icons.merge_type, color: Colors.white24),
+                  _NodeCard('Mixer', Icons.merge),
+                  Icon(Icons.arrow_forward, color: Colors.white24),
+                  _NodeCard('Output', Icons.output),
                 ],
               ),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addSerial'), child: const Text('+ Serial')),
+                FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addParallel'), child: const Text('+ Parallel')),
+                FilledButton.tonal(onPressed: () => onDispatch('nodes.graph', 'addMixer'), child: const Text('+ Mixer')),
+              ],
             ),
           ],
         ),
@@ -540,58 +441,27 @@ class _NodeCanvas extends StatelessWidget {
 }
 
 class _NodeCard extends StatelessWidget {
-  const _NodeCard({required this.title, required this.icon});
+  const _NodeCard(this.title, this.icon);
   final String title;
   final IconData icon;
 
   @override
   Widget build(BuildContext context) => Card(
-        child: SizedBox(
-          width: 130,
-          height: 72,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [Icon(icon, size: 18), const SizedBox(width: 7), Text(title)],
-          ),
-        ),
+        child: SizedBox(width: 105, height: 70, child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 19), const SizedBox(height: 5), Text(title)])),
       );
 }
 
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.white.withValues(alpha: 0.035)..strokeWidth = 1;
-    const step = 24.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
+class _ScopesCanvas extends StatelessWidget {
+  const _ScopesCanvas();
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _ScopeCanvas extends StatelessWidget {
-  const _ScopeCanvas();
-
-  @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) => GridView.count(
         padding: const EdgeInsets.all(12),
-        child: GridView.count(
-          crossAxisCount: 2,
-          childAspectRatio: 16 / 7,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          children: const [
-            _ScopeCard('Waveform'),
-            _ScopeCard('RGB Parade'),
-            _ScopeCard('Vectorscope'),
-            _ScopeCard('Histogram'),
-          ],
-        ),
+        crossAxisCount: 2,
+        childAspectRatio: 16 / 7,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        children: const [_ScopeCard('Waveform'), _ScopeCard('RGB Parade'), _ScopeCard('Vectorscope'), _ScopeCard('Histogram')],
       );
 }
 
@@ -601,12 +471,7 @@ class _ScopeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Stack(
-          children: [
-            Positioned(left: 12, top: 10, child: Text(title)),
-            const Center(child: Icon(Icons.monitor_heart_outlined, size: 54, color: Colors.white24)),
-          ],
-        ),
+        child: Stack(children: [Positioned(left: 12, top: 10, child: Text(title)), const Center(child: Icon(Icons.monitor_heart_outlined, size: 54, color: Colors.white24))]),
       );
 }
 
@@ -617,36 +482,24 @@ class _ExportCanvas extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 650),
+          constraints: const BoxConstraints(maxWidth: 620),
           child: Card(
-            margin: const EdgeInsets.all(28),
+            margin: const EdgeInsets.all(26),
             child: Padding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(22),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text('Delivery', style: Theme.of(context).textTheme.headlineSmall),
-                  const SizedBox(height: 8),
-                  const Text('Production export stays in DigitorEngine and uses the shared timeline/render state.'),
+                  const SizedBox(height: 7),
+                  const Text('Shared DigitorEngine timeline/render state · async jobs · cancel/progress · resumable segments.'),
+                  const SizedBox(height: 14),
+                  const Wrap(spacing: 7, runSpacing: 7, children: [Chip(label: Text('MP4')), Chip(label: Text('MOV')), Chip(label: Text('Matroska')), Chip(label: Text('Image sequence')), Chip(label: Text('HW encode'))]),
                   const SizedBox(height: 18),
-                  const Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [Chip(label: Text('MP4')), Chip(label: Text('MOV')), Chip(label: Text('Matroska')), Chip(label: Text('Image sequence')), Chip(label: Text('HW encode')), Chip(label: Text('Resumable'))],
-                  ),
-                  const SizedBox(height: 22),
-                  FilledButton.icon(
-                    onPressed: () => onDispatch('export.production', 'configure'),
-                    icon: const Icon(Icons.settings_outlined),
-                    label: const Text('Export settings'),
-                  ),
+                  FilledButton.icon(onPressed: () => onDispatch('export.production', 'configure'), icon: const Icon(Icons.settings_outlined), label: const Text('Export settings')),
                   const SizedBox(height: 8),
-                  FilledButton.icon(
-                    onPressed: () => onDispatch('export.production', 'start'),
-                    icon: const Icon(Icons.file_upload_outlined),
-                    label: const Text('Start export'),
-                  ),
+                  FilledButton.icon(onPressed: () => onDispatch('export.production', 'start'), icon: const Icon(Icons.file_upload_outlined), label: const Text('Start export')),
                 ],
               ),
             ),
@@ -662,61 +515,36 @@ class _EngineDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final supported = capabilities.where((item) => item.supported).length;
+    final supported = capabilities.where((c) => c.supported).length;
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
         Text('DigitorEngine', style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Text(snapshot.connected ? 'Native host connected' : 'Native host not connected'),
         const SizedBox(height: 16),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            _MetricCard(label: 'Runtime capabilities', value: '${capabilities.length}'),
-            _MetricCard(label: 'Supported now', value: '$supported'),
-            _MetricCard(label: 'Known UI surfaces', value: '${engineFeatureCatalog.length}'),
-          ],
-        ),
-        const SizedBox(height: 20),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          Chip(label: Text('Known UI ${engineFeatureCatalog.length}')),
+          Chip(label: Text('Runtime ${capabilities.length}')),
+          Chip(label: Text('Supported $supported')),
+        ]),
+        const SizedBox(height: 18),
         const Text('Runtime state'),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         SelectableText(snapshot.state.isEmpty ? 'No native state received.' : snapshot.state.toString()),
       ],
     );
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({required this.label, required this.value});
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Card(
-        child: SizedBox(
-          width: 180,
-          height: 82,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label), const Spacer(), Text(value, style: Theme.of(context).textTheme.titleLarge)]),
-          ),
-        ),
-      );
-}
-
-class _TransportBar extends StatelessWidget {
-  const _TransportBar({required this.snapshot, required this.onCommand});
+class _Transport extends StatelessWidget {
+  const _Transport({required this.snapshot, required this.onCommand});
   final EngineSnapshot snapshot;
   final ValueChanged<String> onCommand;
 
-  String _time(Duration value) {
-    final total = value.inSeconds;
-    final h = (total ~/ 3600).toString().padLeft(2, '0');
-    final m = ((total % 3600) ~/ 60).toString().padLeft(2, '0');
-    final s = (total % 60).toString().padLeft(2, '0');
-    return '$h:$m:$s';
+  String _time(Duration d) {
+    final seconds = d.inSeconds;
+    return '${(seconds ~/ 3600).toString().padLeft(2, '0')}:${((seconds % 3600) ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
   }
 
   @override
@@ -726,44 +554,30 @@ class _TransportBar extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(_time(snapshot.position)),
-            const SizedBox(width: 18),
+            const SizedBox(width: 16),
             IconButton(onPressed: () => onCommand('previousFrame'), icon: const Icon(Icons.skip_previous)),
             IconButton(onPressed: () => onCommand('playReverse'), icon: const Icon(Icons.fast_rewind)),
             IconButton(onPressed: () => onCommand('playPause'), icon: Icon(snapshot.isPlaying ? Icons.pause_circle : Icons.play_circle), iconSize: 30),
             IconButton(onPressed: () => onCommand('stop'), icon: const Icon(Icons.stop_circle_outlined)),
             IconButton(onPressed: () => onCommand('nextFrame'), icon: const Icon(Icons.skip_next)),
             IconButton(onPressed: () => onCommand('loop'), icon: const Icon(Icons.repeat)),
-            const SizedBox(width: 18),
+            const SizedBox(width: 16),
             Text(_time(snapshot.duration)),
           ],
         ),
       );
 }
 
-class _Timeline extends StatelessWidget {
-  const _Timeline();
+class _TimelineSurface extends StatelessWidget {
+  const _TimelineSurface();
 
   @override
   Widget build(BuildContext context) => Column(
-        children: [
-          SizedBox(
-            height: 34,
-            child: Row(
-              children: [
-                const SizedBox(width: 88, child: Center(child: Text('TIMELINE'))),
-                Expanded(
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: 20,
-                    itemBuilder: (context, index) => SizedBox(width: 80, child: Text('${index * 5}s', style: const TextStyle(fontSize: 10))),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Expanded(child: _TrackRow(label: 'V1', icon: Icons.videocam_outlined)),
-          const Expanded(child: _TrackRow(label: 'V2', icon: Icons.videocam_outlined)),
-          const Expanded(child: _TrackRow(label: 'A1', icon: Icons.audiotrack_outlined)),
+        children: const [
+          SizedBox(height: 30, child: Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.only(left: 12), child: Text('MULTITRACK TIMELINE · engine-owned state')))),
+          Expanded(child: _TrackRow(label: 'V1', icon: Icons.videocam_outlined)),
+          Expanded(child: _TrackRow(label: 'V2', icon: Icons.videocam_outlined)),
+          Expanded(child: _TrackRow(label: 'A1', icon: Icons.audiotrack_outlined)),
         ],
       );
 }
@@ -776,15 +590,9 @@ class _TrackRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
         children: [
-          SizedBox(width: 88, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 15), const SizedBox(width: 6), Text(label)])),
+          SizedBox(width: 78, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 15), const SizedBox(width: 5), Text(label)])),
           const VerticalDivider(width: 1),
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(border: Border.all(color: Colors.white12), borderRadius: BorderRadius.circular(4)),
-              child: const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text('Engine-owned track state', style: TextStyle(fontSize: 11, color: Colors.white38)))),
-            ),
-          ),
+          Expanded(child: Container(margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), decoration: BoxDecoration(border: Border.all(color: Colors.white12), borderRadius: BorderRadius.circular(4)), child: const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.symmetric(horizontal: 9), child: Text('Engine track / clips', style: TextStyle(fontSize: 11, color: Colors.white38))))),
         ],
       );
 }
@@ -793,20 +601,19 @@ class _Inspector extends StatelessWidget {
   const _Inspector({
     required this.workspace,
     required this.features,
-    required this.sliderValues,
-    required this.toggleValues,
-    required this.choiceValues,
+    required this.sliders,
+    required this.toggles,
+    required this.choices,
     required this.onAction,
     required this.onSlider,
     required this.onToggle,
     required this.onChoice,
   });
-
   final EngineWorkspace workspace;
   final List<EngineUiFeature> features;
-  final Map<String, double> sliderValues;
-  final Map<String, bool> toggleValues;
-  final Map<String, String> choiceValues;
+  final Map<String, double> sliders;
+  final Map<String, bool> toggles;
+  final Map<String, String> choices;
   final Future<void> Function(String, String, [Object?]) onAction;
   final void Function(String, String, double) onSlider;
   final void Function(String, String, bool) onToggle;
@@ -816,14 +623,11 @@ class _Inspector extends StatelessWidget {
   Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Text('${workspace.label} Inspector', style: Theme.of(context).textTheme.titleSmall),
-          ),
+          Padding(padding: const EdgeInsets.all(12), child: Text('${workspace.label} Inspector', style: Theme.of(context).textTheme.titleSmall)),
           const Divider(height: 1),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               children: [
                 for (final feature in features)
                   ExpansionTile(
@@ -833,12 +637,12 @@ class _Inspector extends StatelessWidget {
                     subtitle: Text(feature.summary, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10)),
                     children: [
                       for (final control in feature.controls)
-                        _ControlView(
+                        _Control(
                           featureId: feature.id,
-                          control: control,
-                          sliderValue: sliderValues['${feature.id}.${control.id}'],
-                          toggleValue: toggleValues['${feature.id}.${control.id}'],
-                          choiceValue: choiceValues['${feature.id}.${control.id}'],
+                          spec: control,
+                          slider: sliders['${feature.id}.${control.id}'],
+                          toggle: toggles['${feature.id}.${control.id}'],
+                          choice: choices['${feature.id}.${control.id}'],
                           onAction: onAction,
                           onSlider: onSlider,
                           onToggle: onToggle,
@@ -853,24 +657,13 @@ class _Inspector extends StatelessWidget {
       );
 }
 
-class _ControlView extends StatelessWidget {
-  const _ControlView({
-    required this.featureId,
-    required this.control,
-    required this.sliderValue,
-    required this.toggleValue,
-    required this.choiceValue,
-    required this.onAction,
-    required this.onSlider,
-    required this.onToggle,
-    required this.onChoice,
-  });
-
+class _Control extends StatelessWidget {
+  const _Control({required this.featureId, required this.spec, required this.slider, required this.toggle, required this.choice, required this.onAction, required this.onSlider, required this.onToggle, required this.onChoice});
   final String featureId;
-  final EngineUiControl control;
-  final double? sliderValue;
-  final bool? toggleValue;
-  final String? choiceValue;
+  final EngineUiControl spec;
+  final double? slider;
+  final bool? toggle;
+  final String? choice;
   final Future<void> Function(String, String, [Object?]) onAction;
   final void Function(String, String, double) onSlider;
   final void Function(String, String, bool) onToggle;
@@ -878,47 +671,23 @@ class _ControlView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (control.type) {
+    switch (spec.type) {
       case EngineControlType.action:
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(8, 3, 8, 7),
-          child: OutlinedButton(onPressed: () => onAction(featureId, control.id), child: Text(control.label)),
-        );
+        return Padding(padding: const EdgeInsets.fromLTRB(7, 3, 7, 7), child: OutlinedButton(onPressed: () => onAction(featureId, spec.id), child: Text(spec.label)));
       case EngineControlType.slider:
-        final value = (sliderValue ?? control.initial).clamp(control.min, control.max);
+        final value = (slider ?? spec.initial).clamp(spec.min, spec.max).toDouble();
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [Expanded(child: Text(control.label, style: const TextStyle(fontSize: 11))), Text(value.toStringAsFixed(2), style: const TextStyle(fontSize: 10))]),
-              Slider(value: value, min: control.min, max: control.max, onChanged: (next) => onSlider(featureId, control.id, next)),
-            ],
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          child: Column(children: [Row(children: [Expanded(child: Text(spec.label, style: const TextStyle(fontSize: 11))), Text(value.toStringAsFixed(2), style: const TextStyle(fontSize: 10))]), Slider(value: value, min: spec.min, max: spec.max, onChanged: (v) => onSlider(featureId, spec.id, v))]),
         );
       case EngineControlType.toggle:
-        return SwitchListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-          title: Text(control.label, style: const TextStyle(fontSize: 11)),
-          value: toggleValue ?? false,
-          onChanged: (next) => onToggle(featureId, control.id, next),
-        );
+        return SwitchListTile(dense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 7), title: Text(spec.label, style: const TextStyle(fontSize: 11)), value: toggle ?? false, onChanged: (v) => onToggle(featureId, spec.id, v));
       case EngineControlType.choice:
-        final options = control.choices;
-        if (options.isEmpty) return const SizedBox.shrink();
-        final selected = options.contains(choiceValue) ? choiceValue! : options.first;
+        if (spec.choices.isEmpty) return const SizedBox.shrink();
+        final selected = spec.choices.contains(choice) ? choice! : spec.choices.first;
         return Padding(
-          padding: const EdgeInsets.fromLTRB(8, 3, 8, 8),
-          child: DropdownButtonFormField<String>(
-            initialValue: selected,
-            isDense: true,
-            decoration: InputDecoration(labelText: control.label, border: const OutlineInputBorder()),
-            items: [for (final option in options) DropdownMenuItem(value: option, child: Text(option))],
-            onChanged: (next) {
-              if (next != null) onChoice(featureId, control.id, next);
-            },
-          ),
+          padding: const EdgeInsets.fromLTRB(7, 3, 7, 8),
+          child: Row(children: [Expanded(child: Text(spec.label, style: const TextStyle(fontSize: 11))), DropdownButton<String>(value: selected, items: [for (final option in spec.choices) DropdownMenuItem(value: option, child: Text(option))], onChanged: (v) { if (v != null) onChoice(featureId, spec.id, v); })]),
         );
       case EngineControlType.vector:
       case EngineControlType.text:
@@ -928,25 +697,18 @@ class _ControlView extends StatelessWidget {
 }
 
 class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.snapshot, required this.knownFeatures, required this.runtimeCapabilities});
+  const _StatusBar({required this.snapshot, required this.capabilities});
   final EngineSnapshot snapshot;
-  final int knownFeatures;
-  final List<EngineCapability> runtimeCapabilities;
+  final List<EngineCapability> capabilities;
 
   @override
   Widget build(BuildContext context) {
-    final supported = runtimeCapabilities.where((item) => item.supported).length;
-    return Container(
+    final supported = capabilities.where((c) => c.supported).length;
+    return SizedBox(
       height: 28,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      child: Row(
-        children: [
-          Icon(snapshot.connected ? Icons.circle : Icons.circle_outlined, size: 9),
-          const SizedBox(width: 6),
-          Text(snapshot.connected ? 'DigitorEngine online' : 'Digitor UI · native host offline', style: const TextStyle(fontSize: 10)),
-          const Spacer(),
-          Text('Known UI: $knownFeatures  ·  Runtime: $supported/${runtimeCapabilities.length}', style: const TextStyle(fontSize: 10)),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Row(children: [Icon(snapshot.connected ? Icons.circle : Icons.circle_outlined, size: 9), const SizedBox(width: 6), Text(snapshot.connected ? 'DigitorEngine online' : 'Digitor UI · native host offline', style: const TextStyle(fontSize: 10)), const Spacer(), Text('Known UI ${engineFeatureCatalog.length} · Runtime $supported/${capabilities.length}', style: const TextStyle(fontSize: 10))]),
       ),
     );
   }

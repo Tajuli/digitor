@@ -3,10 +3,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 /// The only Dart-side boundary to DigitorEngine.
-///
-/// Dart forwards user intent and renders read-only engine state. It must never
-/// decode media, mutate the authoritative timeline, render frames, process
-/// audio/effects, or encode/export media.
+/// Dart forwards user intent and renders read-only engine state. It never
+/// implements media processing, timeline logic, rendering, audio, or export.
 abstract interface class EngineGateway {
   Stream<EngineSnapshot> get snapshots;
   Stream<EngineProgress> get progress;
@@ -20,7 +18,6 @@ abstract interface class EngineGateway {
 
 final class EngineIntent {
   const EngineIntent(this.action, [this.arguments = const <String, Object?>{}]);
-
   final String action;
   final Map<String, Object?> arguments;
 }
@@ -40,17 +37,15 @@ final class EngineCapability {
   final bool supported;
   final Map<String, Object?> metadata;
 
-  factory EngineCapability.fromMap(Map<Object?, Object?> map) {
-    return EngineCapability(
-      id: map['id']?.toString() ?? 'unknown',
-      category: map['category']?.toString() ?? 'Engine',
-      title: map['title']?.toString() ?? map['id']?.toString() ?? 'Unknown',
-      supported: map['supported'] != false,
-      metadata: Map<String, Object?>.from(
-        (map['metadata'] as Map<Object?, Object?>?) ?? const <Object?, Object?>{},
-      ),
-    );
-  }
+  factory EngineCapability.fromMap(Map<Object?, Object?> map) => EngineCapability(
+        id: map['id']?.toString() ?? 'unknown',
+        category: map['category']?.toString() ?? 'Engine',
+        title: map['title']?.toString() ?? map['id']?.toString() ?? 'Unknown',
+        supported: map['supported'] != false,
+        metadata: Map<String, Object?>.from(
+          (map['metadata'] as Map<Object?, Object?>?) ?? const <Object?, Object?>{},
+        ),
+      );
 }
 
 final class EngineSnapshot {
@@ -100,19 +95,19 @@ final class EngineSnapshot {
 
 final class EngineProgress {
   const EngineProgress({required this.operation, required this.fraction});
-
   final String operation;
   final double fraction;
 
   factory EngineProgress.fromMap(Map<Object?, Object?> map) => EngineProgress(
         operation: map['operation']?.toString() ?? 'engine',
-        fraction: ((map['fraction'] as num?)?.toDouble() ?? 0).clamp(0.0, 1.0),
+        fraction: ((map['fraction'] as num?)?.toDouble() ?? 0.0)
+            .clamp(0.0, 1.0)
+            .toDouble(),
       );
 }
 
 final class EngineEvent {
   const EngineEvent(this.type, this.payload);
-
   final String type;
   final Map<String, Object?> payload;
 
@@ -125,9 +120,7 @@ final class EngineEvent {
 }
 
 /// Native-host protocol used by Windows/Android/macOS/iOS adapters.
-///
-/// The host implementation is responsible for binding this protocol to the
-/// verified DigitorEngine C/C++ API and native Flutter texture presenter.
+/// The host binds these channels to DigitorEngine C/C++ and the native texture.
 final class MethodChannelEngineGateway implements EngineGateway {
   MethodChannelEngineGateway({
     MethodChannel? methodChannel,
@@ -143,7 +136,6 @@ final class MethodChannelEngineGateway implements EngineGateway {
   final EventChannel _snapshotEvents;
   final EventChannel _progressEvents;
   final EventChannel _engineEvents;
-
   Stream<EngineSnapshot>? _snapshots;
   Stream<EngineProgress>? _progress;
   Stream<EngineEvent>? _events;
