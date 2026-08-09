@@ -48,7 +48,7 @@ jobs:
       - name: Generate Apple hosts
         run: flutter create --platforms=ios,macos --project-name digitor .
       - run: flutter pub get
-      - name: Set supported deployment targets and file access
+      - name: Set supported Apple deployment targets and file access
         shell: bash
         run: |
           python3 - <<'PY'
@@ -61,6 +61,19 @@ jobs:
           ]:
               text = path.read_text()
               text = re.sub(rf'{key} = [^;]+;', f'{key} = {version};', text)
+              path.write_text(text)
+
+          for path, platform, version in [
+              (Path('ios/Podfile'), 'ios', '13.0'),
+              (Path('macos/Podfile'), 'osx', '11.0'),
+          ]:
+              text = path.read_text()
+              pattern = rf'^#?\s*platform\s+:{platform},\s*[\'\"][^\'\"]+[\'\"]'
+              replacement = f"platform :{platform}, '{version}'"
+              if re.search(pattern, text, flags=re.MULTILINE):
+                  text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+              else:
+                  text = replacement + '\n' + text
               path.write_text(text)
 
           entitlement = '<key>com.apple.security.files.user-selected.read-write</key>\n\t<true/>'
