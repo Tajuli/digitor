@@ -31,19 +31,26 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Provision pinned vcpkg baseline
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:LOCALAPPDATA 'DigitorEngine\deps\vcpkg'
-          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
-          New-Item -ItemType Directory -Force (Split-Path $root) | Out-Null
-          git clone --depth 1 --branch 2025.06.13 https://github.com/microsoft/vcpkg.git $root
-          & (Join-Path $root 'bootstrap-vcpkg.bat') -disableMetrics
-          & (Join-Path $root 'vcpkg.exe') version
       - run: flutter config --enable-windows-desktop
       - name: Generate Windows host
         run: flutter create --platforms=windows --project-name digitor .
       - run: flutter pub get
+      - name: Provision FFmpeg through DigitorEngine package
+        shell: pwsh
+        run: |
+          $configPath = (Resolve-Path '.dart_tool\package_config.json').Path
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $package = $config.packages | Where-Object { $_.name -eq 'digitor_engine_ffi' } | Select-Object -First 1
+          if (-not $package) { throw 'digitor_engine_ffi was not found in package_config.json' }
+          $uri = [Uri]$package.rootUri
+          if ($uri.IsAbsoluteUri) {
+            $packageRoot = $uri.LocalPath
+          } else {
+            $packageRoot = [IO.Path]::GetFullPath((Join-Path (Split-Path $configPath) $package.rootUri))
+          }
+          $provisioner = Join-Path $packageRoot 'tool\provision_ffmpeg_windows.ps1'
+          if (-not (Test-Path $provisioner)) { throw "FFmpeg provisioner not found: $provisioner" }
+          & $provisioner
       - run: flutter build windows --debug -v
 
   apple:
