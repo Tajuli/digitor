@@ -1,33 +1,28 @@
 # Digitor
 
-Digitor is the **UI/UX application layer** for the Digitor video editor. All editing and media-processing responsibilities belong to [DigitorEngine](https://github.com/Tajuli/DigitorEngine).
+Digitor is the Flutter UI/UX client for **DigitorEngine**. The app intentionally contains no independent video-processing engine.
 
-This repository was intentionally rebuilt from a clean snapshot. The old application-side media, render, timeline, and export implementations are not part of the new architecture.
+## Editor surfaces
 
-## Ownership boundary
+The current UI exposes dedicated workspaces for media/import, professional timeline editing, transform/composite, correction, Primary/Log color grading, RGB Curves, HSL Qualifier, scopes, 1D/3D LUTs, masks/windows, blur/sharpen/glow/grain/vignette/motion-blur effects, production nodes, audio, playback/preview quality, performance/runtime, export/delivery, and engine diagnostics.
 
-### Digitor owns
-- Flutter UI and UX
-- layout, navigation, gestures, shortcuts and accessibility
-- presentation-only state
-- displaying engine snapshots, errors and progress
-- forwarding user intent to the engine through a thin gateway
+The known UI catalog is paired with runtime capability discovery. If DigitorEngine reports a capability that the static catalog does not yet recognize, it still appears under **Engine → Runtime-only capabilities** so engine functionality cannot silently disappear from the application surface.
 
-### DigitorEngine owns
-- media import, probing and decode
-- project and timeline domain state
-- playback and frame rendering
-- transforms, color, effects, compositing and audio processing
-- render scheduling and GPU/CPU backend execution
-- encoding and export
-- cancellation, progress and engine errors
+## Engine boundary
 
-## Non-negotiable rule
+Flutter sends commands through `MethodChannelEngineGateway` and renders read-only snapshots/progress/events. Native platform hosts must bind those channels to DigitorEngine and register the production native texture presenter.
 
-No codec, FFmpeg/media backend, timeline calculation, effect implementation, renderer, encoder or exporter may be implemented in this Flutter application. If a feature changes pixels, audio, timing, project state or export output, it belongs in DigitorEngine.
+Channel protocol:
 
-## Current foundation
+- `digitor.engine/methods.v1`
+- `digitor.engine/snapshots.v1`
+- `digitor.engine/progress.v1`
+- `digitor.engine/events.v1`
 
-The Flutter side currently contains only a minimal editor presentation shell and an abstract `EngineGateway`. The gateway is intentionally ABI-agnostic: the concrete native/FFI adapter must bind to verified public DigitorEngine APIs rather than duplicating or inventing engine behavior in Dart.
+DigitorEngine remains responsible for import/probe/decode, timeline, playback, effects/color/nodes, render execution, audio synchronization, preview frames, hardware/runtime policy, and export.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the integration contract.
+## Native-host status
+
+DigitorEngine v0.0.1 itself documents that the final Windows, Android, macOS and iOS Flutter native host/presenter adapters remain platform-host responsibilities. This repository therefore never fakes a connected engine: until a native host registers the protocol, the editor visibly reports **Host unavailable** while preserving the full UI surface.
+
+See `ARCHITECTURE.md` for the ownership and capability-completeness rules.

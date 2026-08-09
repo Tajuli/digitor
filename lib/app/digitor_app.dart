@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 
+import '../core/engine/engine_gateway.dart';
 import '../features/editor/presentation/editor_screen.dart';
 
-class DigitorApp extends StatelessWidget {
+class DigitorApp extends StatefulWidget {
   const DigitorApp({super.key});
+
+  @override
+  State<DigitorApp> createState() => _DigitorAppState();
+}
+
+class _DigitorAppState extends State<DigitorApp> {
+  late final EngineGateway _engine = MethodChannelEngineGateway();
 
   @override
   Widget build(BuildContext context) {
@@ -13,8 +21,15 @@ class DigitorApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+        ),
+        dividerTheme: const DividerThemeData(space: 1, thickness: 1),
+        visualDensity: VisualDensity.compact,
       ),
-      home: const EditorScreen(),
+      home: EditorScreen(engine: _engine),
     );
   }
 }
