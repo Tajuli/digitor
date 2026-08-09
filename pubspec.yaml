@@ -1,11 +1,11 @@
 name: digitor
 description: "A new Flutter project."
-publish_to: 'none' 
+publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.8.1
-  
+  sdk: '>=3.10.0 <4.0.0'
+
 dependencies:
   flutter:
     sdk: flutter
@@ -22,11 +22,18 @@ dependencies:
   just_audio_windows: ^0.2.3
   path_provider: ^2.1.5
   path: ^1.9.1
+  # DigitorEngine is the authoritative media/editing runtime. Flutter remains
+  # responsible for UI/UX and forwards editor commands through this package.
+  digitor_engine_ffi:
+    git:
+      url: https://github.com/Tajuli/DigitorEngine.git
+      path: dart/digitor_engine_ffi
+      ref: main
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-  
+
 flutter:
   uses-material-design: true
