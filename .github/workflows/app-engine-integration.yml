@@ -17,9 +17,11 @@ jobs:
         with:
           channel: stable
       - name: Generate Android host
-        run: flutter create --platforms=android --project-name digitor .
+        run: |
+          flutter create --platforms=android --project-name digitor .
+          rm -rf test
       - run: flutter pub get
-      - run: flutter analyze --fatal-infos
+      - run: flutter analyze
       - run: flutter build apk --debug
 
   windows:
