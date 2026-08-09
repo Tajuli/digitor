@@ -1,7 +1,7 @@
 name: digitor
 description: Production Flutter UI for DigitorEngine.
 publish_to: "none"
-version: 0.2.0+2
+version: 0.2.1+3
 
 environment:
   sdk: ">=3.10.0 <4.0.0"
@@ -14,7 +14,7 @@ dependencies:
     git:
       url: https://github.com/Tajuli/DigitorEngine.git
       path: dart/digitor_engine_ffi
-      ref: 0d57d8e756e7ea7b34c3b1a513fac4a92b350f88
+      ref: 6b997ffeac88522cfd0dca7eadeaf4f7613a1714
   file_selector: ^1.1.0
 
 dev_dependencies:
