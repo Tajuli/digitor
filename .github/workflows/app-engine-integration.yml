@@ -25,15 +25,21 @@ jobs:
       - run: flutter build apk --debug
 
   windows:
-    # windows-latest currently resolves to the VS2026 image, where the latest
-    # vcpkg tool crashes during Visual Studio discovery. Keep integration CI on
-    # the stable VS2022 image until upstream vcpkg fixes that regression.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Provision pinned vcpkg baseline
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:LOCALAPPDATA 'DigitorEngine\deps\vcpkg'
+          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+          New-Item -ItemType Directory -Force (Split-Path $root) | Out-Null
+          git clone --depth 1 --branch 2025.06.13 https://github.com/microsoft/vcpkg.git $root
+          & (Join-Path $root 'bootstrap-vcpkg.bat') -disableMetrics
+          & (Join-Path $root 'vcpkg.exe') version
       - run: flutter config --enable-windows-desktop
       - name: Generate Windows host
         run: flutter create --platforms=windows --project-name digitor .
