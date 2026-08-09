@@ -2,13 +2,13 @@ import 'dart:async';
 
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 
 import 'engine_feature_catalog.dart';
 import 'engine_gateway.dart';
 
-/// Direct DigitorEngine integration. Flutter owns only UI state and user intent;
-/// decode, rendering, grading, node execution, playback and export remain in
-/// DigitorEngine.
+/// Direct DigitorEngine integration. Flutter owns UI state only; decode,
+/// rendering, grading, node execution, playback and export remain in Engine.
 final class DigitorFfiEngineGateway implements EngineGateway {
   final _snapshotController = StreamController<EngineSnapshot>.broadcast();
   final _progressController = StreamController<EngineProgress>.broadcast();
@@ -18,7 +18,15 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   Timer? _statusTimer;
   bool _disposed = false;
   bool _projectOpen = false;
+  bool _previewInFlight = false;
   String? _mediaPath;
+  int? _previewTextureId;
+  int _previewWidth = 0;
+  int _previewHeight = 0;
+  int _previewGeneration = 0;
+  int _lastPreviewPositionUs = -1;
+  int _lastPreviewGraphRevision = -1;
+  int _lastPreviewParameterRevision = -1;
 
   final Map<String, double> _values = <String, double>{};
   final Map<String, bool> _flags = <String, bool>{};
@@ -39,21 +47,90 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   @override
   Future<void> initialize() async {
     if (_workspace != null) return;
-    final workspace = await DigitorEditorWorkspace.create();
-    _workspace = workspace;
-    _statusTimer = Timer.periodic(
-      const Duration(milliseconds: 120),
-      (_) => _emitSnapshot(),
-    );
+    try {
+      final workspace = await DigitorEditorWorkspace.create();
+      _workspace = workspace;
+      _statusTimer = Timer.periodic(
+        const Duration(milliseconds: 80),
+        (_) => unawaited(_pollEngine()),
+      );
+      _emitSnapshot(message: 'DigitorEngine ready');
+      _debug(
+        'ready backend=${workspace.renderer.backendName} '
+        'device=${workspace.renderer.deviceName} '
+        'host=${workspace.hostCapabilities?.platform} '
+        'productionHost=${workspace.productionHostRegistered}',
+      );
+      _event('engineReady', <String, Object?>{
+        'engineVersion': DigitorEngine.version,
+        'backend': workspace.renderer.backendName,
+        'device': workspace.renderer.deviceName,
+        'gpu': workspace.renderer.isGpu,
+        'productionHostRegistered': workspace.productionHostRegistered,
+        'platformHost': workspace.hostCapabilities?.platform,
+      });
+    } catch (error, stack) {
+      _debug('initialize failed: $error\n$stack');
+      rethrow;
+    }
+  }
+
+  Future<void> _pollEngine() async {
+    if (_disposed || _workspace == null) return;
     _emitSnapshot();
-    _event('engineReady', <String, Object?>{
-      'engineVersion': DigitorEngine.version,
-      'backend': workspace.renderer.backendName,
-      'device': workspace.renderer.deviceName,
-      'gpu': workspace.renderer.isGpu,
-      'productionHostRegistered': workspace.productionHostRegistered,
-      'platformHost': workspace.hostCapabilities?.platform,
-    });
+    if (_mediaPath == null || !_w.productionReady || _previewInFlight) return;
+    final status = _w.timelineStatus();
+    final graphChanged = _lastPreviewGraphRevision != _w.graphRevision ||
+        _lastPreviewParameterRevision != _w.parameterRevision;
+    final positionChanged = _lastPreviewPositionUs != status.positionUs;
+    if (status.playbackState == DigitorPlaybackState.playing ||
+        graphChanged ||
+        positionChanged ||
+        _previewTextureId == null) {
+      await _renderPreview();
+    }
+  }
+
+  Future<void> _renderPreview({bool force = false}) async {
+    if (_disposed || _previewInFlight || _mediaPath == null || !_w.productionReady) {
+      return;
+    }
+    final media = _w.media;
+    if (media == null) return;
+    final status = _w.timelineStatus();
+    if (!force &&
+        _previewTextureId != null &&
+        _lastPreviewPositionUs == status.positionUs &&
+        _lastPreviewGraphRevision == _w.graphRevision &&
+        _lastPreviewParameterRevision == _w.parameterRevision) {
+      return;
+    }
+
+    _previewInFlight = true;
+    try {
+      final preview = await _w.presentPreview(
+        timestampUs: status.positionUs,
+        width: media.firstFrame.width,
+        height: media.firstFrame.height,
+      );
+      _previewTextureId = preview.textureId;
+      _previewWidth = preview.width;
+      _previewHeight = preview.height;
+      _previewGeneration = preview.generation;
+      _lastPreviewPositionUs = preview.timestampUs;
+      _lastPreviewGraphRevision = _w.graphRevision;
+      _lastPreviewParameterRevision = _w.parameterRevision;
+      _debug(
+        'preview generation=${preview.generation} texture=${preview.textureId} '
+        '${preview.width}x${preview.height} t=${preview.timestampUs}',
+      );
+      _emitSnapshot(message: 'Preview frame ${preview.generation}');
+    } catch (error, stack) {
+      _debug('preview failed: $error\n$stack');
+      _event('previewError', <String, Object?>{'error': '$error'});
+    } finally {
+      _previewInFlight = false;
+    }
   }
 
   @override
@@ -87,11 +164,16 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
   bool _supportedFeature(String id, DigitorEditorWorkspace workspace) {
     const direct = <String>{
+      'project.lifecycle',
       'media.import',
       'media.decode',
       'media.metadata',
       'media.zeroCopy',
       'color.correction',
+      'color.primaryWheels',
+      'color.logWheels',
+      'color.rgbCurves',
+      'color.hslQualifier',
       'effects.masksWindows',
       'effects.blur',
       'effects.sharpen',
@@ -103,6 +185,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'nodes.connections',
       'audio.sync',
       'audio.track',
+      'timeline.speed',
       'playback.transport',
       'runtime.backend',
       'export.production',
@@ -116,117 +199,163 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     if (_disposed) return;
     final action = intent.action;
     final value = intent.arguments['value'];
-
-    if (action == 'media.import.requestPicker' ||
-        action == 'project.lifecycle.open') {
-      await _importMedia();
-      return;
-    }
-    if (action == 'project.lifecycle.new') {
-      _projectOpen = true;
-      _mediaPath = null;
-      _values.clear();
-      _flags.clear();
-      _emitSnapshot(message: 'New project');
-      return;
-    }
-    if (action == 'project.lifecycle.save') {
-      _event('projectSaveRequested', <String, Object?>{
-        'recipeIdentity': _w.recipeIdentity,
-        'graphRevision': _w.graphRevision,
-        'parameterRevision': _w.parameterRevision,
-      });
-      return;
-    }
-
-    if (action.startsWith('color.correction.')) {
-      final key = action.substring('color.correction.'.length);
-      if (value is num) {
-        _values['correction.$key'] = value.toDouble();
-        _rebuildSelectedOperations();
+    _debug('dispatch $action value=$value');
+    try {
+      if (action == 'media.import.requestPicker' || action == 'project.lifecycle.open') {
+        await _importMedia();
+        return;
       }
-      return;
-    }
-
-    if (action.startsWith('effects.masksWindows.')) {
-      _handleWindow(action, value);
-      return;
-    }
-    if (action.startsWith('effects.')) {
-      _handleEffect(action, value);
-      return;
-    }
-
-    if (action.startsWith('nodes.graph.')) {
-      switch (action) {
-        case 'nodes.graph.addSerial':
-          _w.addSerialNode();
-          break;
-        case 'nodes.graph.addParallel':
-          _w.addParallelNodes();
-          break;
-        default:
-          _eventUnsupported(action);
-          return;
+      if (action == 'project.lifecycle.new') {
+        _projectOpen = true;
+        _mediaPath = null;
+        _previewTextureId = null;
+        _values.clear();
+        _flags.clear();
+        _emitSnapshot(message: 'New project');
+        return;
       }
-      _emitSnapshot();
-      return;
-    }
+      if (action == 'project.lifecycle.save') {
+        _event('projectSaveRequested', <String, Object?>{
+          'recipeIdentity': _w.recipeIdentity,
+          'graphRevision': _w.graphRevision,
+          'parameterRevision': _w.parameterRevision,
+        });
+        return;
+      }
 
-    if (action == 'nodes.connections.bypass' && value is bool) {
-      _w.setSelectedBypassed(value);
-      _emitSnapshot();
-      return;
-    }
+      if (action.startsWith('color.correction.')) {
+        final key = action.substring('color.correction.'.length);
+        if (value is num) {
+          _values['correction.$key'] = value.toDouble();
+          await _rebuildSelectedOperations();
+        }
+        return;
+      }
 
-    if (action.startsWith('playback.transport.')) {
-      _handleTransport(action, value);
-      return;
-    }
+      if (action == 'color.primaryWheels.reset') {
+        _flags.remove('primary.enabled');
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.primaryWheels.open') {
+        _flags['primary.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.logWheels.reset') {
+        _flags.remove('log.enabled');
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.logWheels.open') {
+        _flags['log.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.rgbCurves.reset') {
+        _flags['curves.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.rgbCurves.channel') {
+        _event('curveChannelChanged', <String, Object?>{'channel': value});
+        return;
+      }
+      if (action == 'color.hslQualifier.highlight' && value is bool) {
+        _flags['qualifier.highlight'] = value;
+        await _rebuildSelectedOperations();
+        return;
+      }
 
-    if (action == 'audio.track.gain' && value is num) {
-      _values['audio.gain'] = value.toDouble();
-      _applyAudioControls();
-      return;
-    }
-    if (action == 'timeline.speed.rate' && value is num) {
-      _values['playback.rate'] = value.toDouble();
-      _applyAudioControls();
-      return;
-    }
-    if (action == 'audio.sync.latencyMs' && value is num) {
-      final sync = DigitorAudioSync().probe(
-        manualOffsetUs: (value.toDouble() * 1000).round(),
-        manualOverride: true,
-      );
-      _event('audioSync', <String, Object?>{
-        'measuredAvailable': sync.measuredAvailable,
-        'measuredLatencyUs': sync.measuredLatencyUs,
-        'effectiveOffsetUs': sync.effectiveOffsetUs,
-      });
-      return;
-    }
+      if (action.startsWith('effects.masksWindows.')) {
+        await _handleWindow(action, value);
+        return;
+      }
+      if (action.startsWith('effects.')) {
+        await _handleEffect(action, value);
+        return;
+      }
 
-    if (action == 'export.production.start') {
-      await _exportCurrentMedia();
-      return;
-    }
+      if (action.startsWith('nodes.graph.')) {
+        switch (action) {
+          case 'nodes.graph.addSerial':
+            _w.addSerialNode();
+            break;
+          case 'nodes.graph.addParallel':
+            _w.addParallelNodes();
+            break;
+          default:
+            _eventUnsupported(action);
+            return;
+        }
+        _emitSnapshot();
+        await _renderPreview(force: true);
+        return;
+      }
 
-    if (action == 'runtime.backend.inspect' ||
-        action == 'media.metadata.inspect') {
-      _emitDiagnostics();
-      return;
-    }
+      if (action == 'nodes.connections.bypass' && value is bool) {
+        _w.setSelectedBypassed(value);
+        _emitSnapshot();
+        await _renderPreview(force: true);
+        return;
+      }
 
-    _eventUnsupported(action);
+      if (action.startsWith('playback.transport.')) {
+        await _handleTransport(action, value);
+        return;
+      }
+
+      if (action == 'audio.track.gain' && value is num) {
+        _values['audio.gain'] = value.toDouble();
+        _applyAudioControls();
+        return;
+      }
+      if (action == 'timeline.speed.rate' && value is num) {
+        _values['playback.rate'] = value.toDouble();
+        _applyAudioControls();
+        return;
+      }
+      if (action == 'audio.sync.latencyMs' && value is num) {
+        final sync = DigitorAudioSync().probe(
+          manualOffsetUs: (value.toDouble() * 1000).round(),
+          manualOverride: true,
+        );
+        _event('audioSync', <String, Object?>{
+          'measuredAvailable': sync.measuredAvailable,
+          'measuredLatencyUs': sync.measuredLatencyUs,
+          'effectiveOffsetUs': sync.effectiveOffsetUs,
+        });
+        return;
+      }
+
+      if (action == 'export.production.start') {
+        await _exportCurrentMedia();
+        return;
+      }
+
+      if (action == 'runtime.backend.inspect' || action == 'media.metadata.inspect') {
+        _emitDiagnostics();
+        return;
+      }
+
+      _eventUnsupported(action);
+    } catch (error, stack) {
+      _debug('dispatch failed $action: $error\n$stack');
+      _event('engineError', <String, Object?>{'action': action, 'error': '$error'});
+      rethrow;
+    }
   }
 
   Future<void> _importMedia() async {
     final file = await openFile();
     if (file == null) return;
+    _debug('opening ${file.path}');
     final media = _w.openMedia(file.path);
     _mediaPath = file.path;
     _projectOpen = true;
+    _lastPreviewPositionUs = -1;
+    _lastPreviewGraphRevision = -1;
+    _lastPreviewParameterRevision = -1;
     _emitSnapshot(message: 'Media opened');
     _event('mediaOpened', <String, Object?>{
       'path': media.path,
@@ -240,9 +369,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'gpuResident': media.firstFrame.gpuResident,
       'cpuResident': media.firstFrame.cpuResident,
     });
+    await _renderPreview(force: true);
   }
 
-  void _handleTransport(String action, Object? value) {
+  Future<void> _handleTransport(String action, Object? value) async {
     final status = _w.timelineStatus();
     switch (action) {
       case 'playback.transport.playPause':
@@ -269,6 +399,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         return;
     }
     _emitSnapshot();
+    await _renderPreview(force: true);
   }
 
   void _applyAudioControls() {
@@ -282,7 +413,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     _emitSnapshot();
   }
 
-  void _handleEffect(String action, Object? value) {
+  Future<void> _handleEffect(String action, Object? value) async {
     const types = <String, DigitorNodeEffectType>{
       'effects.blur.amount': DigitorNodeEffectType.blur,
       'effects.sharpen.amount': DigitorNodeEffectType.sharpen,
@@ -297,10 +428,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       return;
     }
     _values['effect.${type.name}'] = value.toDouble();
-    _rebuildSelectedOperations();
+    await _rebuildSelectedOperations();
   }
 
-  void _handleWindow(String action, Object? value) {
+  Future<void> _handleWindow(String action, Object? value) async {
     if (action.endsWith('.feather') && value is num) {
       _values['window.feather'] = value.toDouble();
     } else if (action.endsWith('.invert') && value is bool) {
@@ -309,10 +440,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       _eventUnsupported(action);
       return;
     }
-    _rebuildSelectedOperations();
+    await _rebuildSelectedOperations();
   }
 
-  void _rebuildSelectedOperations() {
+  Future<void> _rebuildSelectedOperations() async {
     _w.clearSelectedOperations();
     if (_values.keys.any((key) => key.startsWith('correction.'))) {
       _w.addCorrection(
@@ -329,14 +460,27 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         ),
       );
     }
+    if (_flags['primary.enabled'] == true) {
+      _w.addPrimaryWheels(const DigitorPrimaryWheels());
+    }
+    if (_flags['log.enabled'] == true) {
+      _w.addLogWheels(const DigitorLogWheels());
+    }
+    if (_flags['curves.enabled'] == true) {
+      _w.addRgbCurves(const DigitorRgbCurves());
+    }
+    if (_flags.containsKey('qualifier.highlight')) {
+      _w.addHslQualifier(
+        DigitorHslQualifier(matteOutput: _flags['qualifier.highlight'] ?? false),
+      );
+    }
     for (final type in DigitorNodeEffectType.values) {
       final amount = _values['effect.${type.name}'];
       if (amount != null && amount != 0) {
         _w.addEffect(DigitorNodeEffect(type: type, amount: amount));
       }
     }
-    if (_values.containsKey('window.feather') ||
-        _flags.containsKey('window.invert')) {
+    if (_values.containsKey('window.feather') || _flags.containsKey('window.invert')) {
       _w.addPowerWindow(
         DigitorPowerWindow(
           feather: _values['window.feather'] ?? 0.1,
@@ -345,6 +489,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       );
     }
     _emitSnapshot(message: 'Recipe ${_w.recipeIdentity}');
+    await _renderPreview(force: true);
   }
 
   Future<void> _exportCurrentMedia() async {
@@ -372,15 +517,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         ? media.firstFrame.duration.inMicroseconds
         : 33333;
     final lastFrame = status.durationUs > 0
-        ? (status.durationUs / frameDurationUs)
-            .ceil()
-            .clamp(0, 1 << 30)
-            .toInt()
+        ? (status.durationUs / frameDurationUs).ceil().clamp(0, 1 << 30).toInt()
         : media.firstFrame.frameNumber;
 
-    _progressController.add(
-      const EngineProgress(operation: 'export', fraction: 0),
-    );
+    _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
     _w.exportMedia(
       path: location.path,
       firstFrame: media.firstFrame.frameNumber,
@@ -416,6 +556,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'timelinePublications': telemetry.publications,
       'productionHostRegistered': _w.productionHostRegistered,
       'productionReady': _w.productionReady,
+      'previewTextureId': _previewTextureId,
+      'previewGeneration': _previewGeneration,
     });
   }
 
@@ -439,6 +581,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
           'parameterRevision': _w.parameterRevision,
           'productionHostRegistered': _w.productionHostRegistered,
           'productionReady': _w.productionReady,
+          'previewTextureId': _previewTextureId,
+          'previewWidth': _previewWidth,
+          'previewHeight': _previewHeight,
+          'previewGeneration': _previewGeneration,
         },
         engineMessage: message,
       ),
@@ -450,7 +596,12 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   }
 
   void _eventUnsupported(String action) {
+    _debug('unsupported action: $action');
     _event('unsupportedAction', <String, Object?>{'action': action});
+  }
+
+  void _debug(String message) {
+    if (kDebugMode) debugPrint('[DigitorEngine] $message');
   }
 
   @override
