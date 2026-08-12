@@ -7,6 +7,17 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+$boundaryVerifier = Join-Path $PSScriptRoot 'verify_engine_boundary.ps1'
+if (-not (Test-Path $boundaryVerifier)) {
+  throw "Engine boundary verifier not found: $boundaryVerifier"
+}
+
+Write-Host 'Verifying Digitor UI-only / DigitorEngine ownership boundary...'
+& $boundaryVerifier
+if ($LASTEXITCODE -ne 0) {
+  throw "Engine boundary verification failed with exit code $LASTEXITCODE"
+}
+
 Write-Host 'Enabling Flutter Windows desktop support...'
 flutter config --enable-windows-desktop
 
