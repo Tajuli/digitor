@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../core/engine/bootstrapped_engine_gateway.dart';
 import '../core/engine/engine_gateway.dart';
-import '../core/engine/ffi_engine_gateway.dart';
 import '../features/editor/presentation/editor_screen.dart';
 
 class DigitorApp extends StatefulWidget {
@@ -12,7 +12,7 @@ class DigitorApp extends StatefulWidget {
 }
 
 class _DigitorAppState extends State<DigitorApp> {
-  late final EngineGateway _engine = DigitorFfiEngineGateway();
+  late final EngineGateway _engine = BootstrappedDigitorEngineGateway();
 
   @override
   Widget build(BuildContext context) {
