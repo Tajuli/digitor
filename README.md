@@ -10,19 +10,20 @@ The known UI catalog is paired with runtime capability discovery. If DigitorEngi
 
 ## Engine boundary
 
-Flutter sends commands through `MethodChannelEngineGateway` and renders read-only snapshots/progress/events. Native platform hosts must bind those channels to DigitorEngine and register the production native texture presenter.
+`DigitorApp` creates `DigitorFfiEngineGateway`, which is the Flutter-facing adapter over the `digitor_engine_ffi` package. The package owns the native FFI handles, DigitorEngine workspace/session objects, platform production-host registration and native texture presentation. Flutter owns presentation and command marshalling only; media processing remains in DigitorEngine.
 
-Channel protocol:
-
-- `digitor.engine/methods.v1`
-- `digitor.engine/snapshots.v1`
-- `digitor.engine/progress.v1`
-- `digitor.engine/events.v1`
+The `digitor_engine_ffi` dependency is pinned to an audited DigitorEngine commit in `pubspec.yaml`. On Windows its Dart native-assets hook builds and bundles `digitor_engine.dll` and the required FFmpeg runtime libraries.
 
 DigitorEngine remains responsible for import/probe/decode, timeline, playback, effects/color/nodes, render execution, audio synchronization, preview frames, hardware/runtime policy, and export.
 
-## Native-host status
+## Windows build
 
-DigitorEngine v0.0.1 itself documents that the final Windows, Android, macOS and iOS Flutter native host/presenter adapters remain platform-host responsibilities. This repository therefore never fakes a connected engine: until a native host registers the protocol, the editor visibly reports **Host unavailable** while preserving the full UI surface.
+From the repository root in a VS Code PowerShell terminal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tool\build_windows.ps1 -Mode release
+```
+
+For a debug build use `-Mode debug`. The script enables Windows desktop, creates the Flutter Windows host when missing, resolves packages, provisions the DigitorEngine FFmpeg SDK/runtime, and runs the Flutter build.
 
 See `ARCHITECTURE.md` for the ownership and capability-completeness rules.

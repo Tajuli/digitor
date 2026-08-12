@@ -8,7 +8,7 @@ Digitor may own:
 - layout, navigation, gestures and visual interaction state
 - inspector widgets, panels, menus and dialogs
 - presentation-only selection/hover/expanded state
-- marshalling user commands to the native host
+- marshalling user commands to the engine package
 - displaying engine snapshots, progress, telemetry, errors and capabilities
 
 DigitorEngine owns:
@@ -21,30 +21,21 @@ DigitorEngine owns:
 - preview rendering and native texture frames
 - encoding/export, asynchronous jobs, resume/cancel/progress and errors
 
-There must never be a second Dart implementation of media processing, timeline math, grading/effects, playback, or export.
+There must never be a second Dart implementation of media processing, timeline rendering, grading/effects, playback rendering, or export processing.
 
-## Flutter ↔ native protocol
+## Flutter ↔ DigitorEngine boundary
 
-`MethodChannelEngineGateway` is the single Dart boundary.
+`DigitorFfiEngineGateway` is the application-facing boundary. It adapts UI intents and read-only UI state to the public `digitor_engine_ffi` Flutter package.
 
-- methods: `digitor.engine/methods.v1`
-- snapshots: `digitor.engine/snapshots.v1`
-- progress: `digitor.engine/progress.v1`
-- events: `digitor.engine/events.v1`
+The `digitor_engine_ffi` package owns native FFI bindings, engine/workspace/session handles, platform production-host registration, native texture presentation and native-assets packaging. The application must not open `digitor_engine.dll` directly or duplicate C ABI bindings.
 
-Required method calls:
-- `initialize`
-- `discoverCapabilities`
-- `dispatch` with `{ action, arguments }`
-- `dispose`
-
-Platform hosts bind this protocol to the verified DigitorEngine C/C++ APIs and native Flutter texture presenter. The Dart app must show host-unavailable state instead of emulating engine behavior.
+The dependency is pinned to an exact audited DigitorEngine commit in `pubspec.yaml` so app and native ABI move together deliberately.
 
 ## Capability completeness rule
 
-`engine_feature_catalog.dart` defines dedicated UI for source-backed DigitorEngine v0.0.1 features. At startup the native host must also return `discoverCapabilities()`.
+`engine_feature_catalog.dart` defines dedicated UI for source-backed DigitorEngine features. At startup the gateway also reports runtime capabilities from the active renderer/production host.
 
-Any runtime capability whose `id` is not yet in the known catalog is automatically displayed in **Engine → Runtime-only capabilities**. This prevents new or less-common engine functionality from becoming invisible in the app while a dedicated control surface is being added.
+Any runtime capability whose `id` is not yet in the known catalog should remain visible under **Engine → Runtime-only capabilities**. This prevents new or less-common engine functionality from becoming invisible in the app while a dedicated control surface is being added.
 
 A runtime capability record uses:
 
@@ -58,7 +49,7 @@ A runtime capability record uses:
 }
 ```
 
-The platform host is the source of truth for whether a capability is available on the active device/backend.
+The active DigitorEngine renderer and production host are the source of truth for whether a capability is available on the device/backend.
 
 ## Preview/export identity
 
