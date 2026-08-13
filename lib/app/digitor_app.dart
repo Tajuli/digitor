@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/engine/bootstrapped_engine_gateway.dart';
 import '../core/engine/engine_gateway.dart';
 import '../features/editor/presentation/editor_screen.dart';
+import '../features/editor/presentation/mobile_editor_screen.dart';
 
 class DigitorApp extends StatefulWidget {
   const DigitorApp({super.key});
@@ -26,7 +27,14 @@ class _DigitorAppState extends State<DigitorApp> {
         dividerTheme: const DividerThemeData(space: 1, thickness: 1),
         visualDensity: VisualDensity.compact,
       ),
-      home: EditorScreen(engine: _engine),
+      home: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 760) {
+            return MobileEditorScreen(engine: _engine);
+          }
+          return EditorScreen(engine: _engine);
+        },
+      ),
     );
   }
 }
