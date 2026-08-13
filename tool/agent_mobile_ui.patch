@@ -1,0 +1,476 @@
+--- a/lib/features/editor/presentation/editor_screen.dart
++++ b/lib/features/editor/presentation/editor_screen.dart
+@@ -114,118 +114,173 @@
+   Widget build(BuildContext context) {
+     return Scaffold(
+       body: SafeArea(
+-        child: Column(
+-          children: <Widget>[
+-            _TopBar(
+-              snapshot: snapshot,
+-              progress: progress,
+-              onImport: () => dispatch('media.import', 'requestPicker'),
+-              onExport: () => setState(() => workspace = EngineWorkspace.export),
+-            ),
+-            if (error != null)
+-              Material(
+-                color: Theme.of(context).colorScheme.errorContainer,
+-                child: Padding(
+-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+-                  child: Row(
+-                    children: <Widget>[
+-                      const Icon(Icons.warning_amber_rounded, size: 18),
+-                      const SizedBox(width: 8),
+-                      Expanded(
+-                        child: SelectableText(
+-                          error!,
+-                          maxLines: 2,
+-                        ),
+-                      ),
+-                      TextButton(onPressed: initialize, child: const Text('Retry')),
+-                    ],
+-                  ),
++        child: LayoutBuilder(
++          builder: (context, constraints) {
++            final compact = constraints.maxWidth < 760;
++            return Column(
++              children: <Widget>[
++                _TopBar(
++                  compact: compact,
++                  snapshot: snapshot,
++                  progress: progress,
++                  onImport: () => dispatch('media.import', 'requestPicker'),
++                  onExport: () =>
++                      setState(() => workspace = EngineWorkspace.export),
+                 ),
+-              ),
++                if (error != null) _buildErrorBanner(context),
++                Expanded(
++                  child: compact ? _buildMobileEditor() : _buildDesktopEditor(),
++                ),
++              ],
++            );
++          },
++        ),
++      ),
++    );
++  }
++
++  Widget _buildErrorBanner(BuildContext context) {
++    return Material(
++      color: Theme.of(context).colorScheme.errorContainer,
++      child: Padding(
++        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
++        child: Row(
++          children: <Widget>[
++            const Icon(Icons.warning_amber_rounded, size: 18),
++            const SizedBox(width: 8),
+             Expanded(
+-              child: Row(
+-                children: <Widget>[
+-                  _WorkspaceRail(
+-                    selected: workspace,
+-                    onSelected: (value) => setState(() => workspace = value),
+-                  ),
+-                  const VerticalDivider(width: 1),
+-                  SizedBox(
+-                    width: 245,
+-                    child: _FeatureList(
+-                      features: features,
+-                      supported: supported,
+-                    ),
+-                  ),
+-                  const VerticalDivider(width: 1),
+-                  Expanded(
+-                    child: Column(
+-                      children: <Widget>[
+-                        Expanded(
+-                          child: _Canvas(
+-                            workspace: workspace,
+-                            snapshot: snapshot,
+-                            capabilities: capabilities,
+-                            dispatch: dispatch,
+-                          ),
+-                        ),
+-                        const Divider(height: 1),
+-                        _Transport(snapshot: snapshot, dispatch: dispatch),
+-                        const Divider(height: 1),
+-                        SizedBox(
+-                          height: 150,
+-                          child: _Timeline(snapshot: snapshot),
+-                        ),
+-                      ],
+-                    ),
+-                  ),
+-                  const VerticalDivider(width: 1),
+-                  SizedBox(
+-                    width: 330,
+-                    child: ListView(
+-                      padding: const EdgeInsets.all(10),
+-                      children: <Widget>[
+-                        Text(
+-                          'Inspector',
+-                          style: Theme.of(context).textTheme.titleMedium,
+-                        ),
+-                        const SizedBox(height: 8),
+-                        for (final feature in features)
+-                          _FeatureControls(
+-                            feature: feature,
+-                            supported: supported(feature.id),
+-                            sliders: sliders,
+-                            toggles: toggles,
+-                            choices: choices,
+-                            dispatch: dispatch,
+-                            onSlider: (key, value) =>
+-                                setState(() => sliders[key] = value),
+-                            onToggle: (key, value) =>
+-                                setState(() => toggles[key] = value),
+-                            onChoice: (key, value) =>
+-                                setState(() => choices[key] = value),
+-                          ),
+-                      ],
+-                    ),
+-                  ),
+-                ],
++              child: SelectableText(
++                error!,
++                maxLines: 2,
+               ),
+             ),
++            TextButton(onPressed: initialize, child: const Text('Retry')),
+           ],
+         ),
+       ),
+     );
+   }
++
++  Widget _buildDesktopEditor() {
++    return Row(
++      children: <Widget>[
++        _WorkspaceRail(
++          selected: workspace,
++          onSelected: (value) => setState(() => workspace = value),
++        ),
++        const VerticalDivider(width: 1),
++        SizedBox(
++          width: 245,
++          child: _FeatureList(features: features, supported: supported),
++        ),
++        const VerticalDivider(width: 1),
++        Expanded(
++          child: Column(
++            children: <Widget>[
++              Expanded(
++                child: _Canvas(
++                  workspace: workspace,
++                  snapshot: snapshot,
++                  capabilities: capabilities,
++                  dispatch: dispatch,
++                ),
++              ),
++              const Divider(height: 1),
++              _Transport(snapshot: snapshot, dispatch: dispatch),
++              const Divider(height: 1),
++              SizedBox(height: 150, child: _Timeline(snapshot: snapshot)),
++            ],
++          ),
++        ),
++        const VerticalDivider(width: 1),
++        SizedBox(
++          width: 330,
++          child: ListView(
++            padding: const EdgeInsets.all(10),
++            children: <Widget>[
++              Text('Inspector', style: Theme.of(context).textTheme.titleMedium),
++              const SizedBox(height: 8),
++              for (final feature in features)
++                _FeatureControls(
++                  feature: feature,
++                  supported: supported(feature.id),
++                  sliders: sliders,
++                  toggles: toggles,
++                  choices: choices,
++                  dispatch: dispatch,
++                  onSlider: (key, value) => setState(() => sliders[key] = value),
++                  onToggle: (key, value) => setState(() => toggles[key] = value),
++                  onChoice: (key, value) => setState(() => choices[key] = value),
++                ),
++            ],
++          ),
++        ),
++      ],
++    );
++  }
++
++  Widget _buildMobileEditor() {
++    final showTimeline = workspace == EngineWorkspace.edit ||
++        workspace == EngineWorkspace.playback;
++    return Column(
++      children: <Widget>[
++        _MobileWorkspaceBar(
++          selected: workspace,
++          onSelected: (value) => setState(() => workspace = value),
++        ),
++        const Divider(height: 1),
++        Expanded(
++          child: Column(
++            children: <Widget>[
++              Expanded(
++                flex: 5,
++                child: _Canvas(
++                  workspace: workspace,
++                  snapshot: snapshot,
++                  capabilities: capabilities,
++                  dispatch: dispatch,
++                ),
++              ),
++              const Divider(height: 1),
++              _Transport(snapshot: snapshot, dispatch: dispatch),
++              if (showTimeline) ...<Widget>[
++                const Divider(height: 1),
++                SizedBox(height: 112, child: _Timeline(snapshot: snapshot)),
++              ],
++              const Divider(height: 1),
++              Expanded(
++                flex: 4,
++                child: _MobileToolPanel(
++                  features: features,
++                  supported: supported,
++                  sliders: sliders,
++                  toggles: toggles,
++                  choices: choices,
++                  dispatch: dispatch,
++                  onSlider: (key, value) => setState(() => sliders[key] = value),
++                  onToggle: (key, value) => setState(() => toggles[key] = value),
++                  onChoice: (key, value) => setState(() => choices[key] = value),
++                ),
++              ),
++            ],
++          ),
++        ),
++      ],
++    );
++  }
++
+ }
+ 
+ class _TopBar extends StatelessWidget {
+   const _TopBar({
++    required this.compact,
+     required this.snapshot,
+     required this.progress,
+     required this.onImport,
+     required this.onExport,
+   });
+ 
++  final bool compact;
+   final EngineSnapshot snapshot;
+   final EngineProgress? progress;
+   final VoidCallback onImport;
+@@ -235,20 +290,27 @@
+   Widget build(BuildContext context) => SizedBox(
+         height: 54,
+         child: Padding(
+-          padding: const EdgeInsets.symmetric(horizontal: 12),
++          padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
+           child: Row(
+             children: <Widget>[
+               const Icon(Icons.movie_outlined),
+               const SizedBox(width: 8),
+               Text('Digitor', style: Theme.of(context).textTheme.titleMedium),
+-              const SizedBox(width: 18),
+-              TextButton.icon(
+-                onPressed: onImport,
+-                icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+-                label: const Text('Import'),
+-              ),
++              SizedBox(width: compact ? 6 : 18),
++              if (compact)
++                IconButton(
++                  tooltip: 'Import',
++                  onPressed: onImport,
++                  icon: const Icon(Icons.add_photo_alternate_outlined),
++                )
++              else
++                TextButton.icon(
++                  onPressed: onImport,
++                  icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
++                  label: const Text('Import'),
++                ),
+               const Spacer(),
+-              if (progress != null && progress!.fraction < 1)
++              if (!compact && progress != null && progress!.fraction < 1)
+                 SizedBox(
+                   width: 170,
+                   child: Row(
+@@ -261,26 +323,144 @@
+                     ],
+                   ),
+                 ),
+-              const SizedBox(width: 10),
+-              Chip(
+-                avatar: Icon(
+-                  snapshot.connected ? Icons.check_circle : Icons.link_off,
+-                  size: 16,
+-                ),
+-                label: Text(
+-                  snapshot.connected ? 'Engine connected' : 'Disconnected',
++              if (!compact) const SizedBox(width: 10),
++              if (compact)
++                Tooltip(
++                  message: snapshot.connected
++                      ? 'Engine connected'
++                      : 'Engine disconnected',
++                  child: Icon(
++                    snapshot.connected ? Icons.check_circle : Icons.link_off,
++                    color: snapshot.connected
++                        ? Theme.of(context).colorScheme.primary
++                        : Theme.of(context).colorScheme.error,
++                  ),
++                )
++              else
++                Chip(
++                  avatar: Icon(
++                    snapshot.connected ? Icons.check_circle : Icons.link_off,
++                    size: 16,
++                  ),
++                  label: Text(
++                    snapshot.connected ? 'Engine connected' : 'Disconnected',
++                  ),
++                ),
++              SizedBox(width: compact ? 2 : 10),
++              if (compact)
++                IconButton(
++                  tooltip: 'Export',
++                  onPressed: onExport,
++                  icon: const Icon(Icons.file_upload_outlined),
++                )
++              else
++                FilledButton.icon(
++                  onPressed: onExport,
++                  icon: const Icon(Icons.file_upload_outlined, size: 18),
++                  label: const Text('Export'),
+                 ),
+-              ),
+-              const SizedBox(width: 10),
+-              FilledButton.icon(
+-                onPressed: onExport,
+-                icon: const Icon(Icons.file_upload_outlined, size: 18),
+-                label: const Text('Export'),
+-              ),
+             ],
+           ),
+         ),
+       );
++
++}
++
++class _MobileWorkspaceBar extends StatelessWidget {
++  const _MobileWorkspaceBar({required this.selected, required this.onSelected});
++
++  final EngineWorkspace selected;
++  final ValueChanged<EngineWorkspace> onSelected;
++
++  @override
++  Widget build(BuildContext context) => SizedBox(
++        height: 64,
++        child: ListView.separated(
++          scrollDirection: Axis.horizontal,
++          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
++          itemCount: EngineWorkspace.values.length,
++          separatorBuilder: (_, __) => const SizedBox(width: 6),
++          itemBuilder: (context, index) {
++            final item = EngineWorkspace.values[index];
++            final active = item == selected;
++            return InkWell(
++              borderRadius: BorderRadius.circular(12),
++              onTap: () => onSelected(item),
++              child: AnimatedContainer(
++                duration: const Duration(milliseconds: 160),
++                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
++                decoration: BoxDecoration(
++                  borderRadius: BorderRadius.circular(12),
++                  color: active
++                      ? Theme.of(context).colorScheme.secondaryContainer
++                      : Theme.of(context).colorScheme.surfaceContainerLow,
++                ),
++                child: Row(
++                  mainAxisSize: MainAxisSize.min,
++                  children: <Widget>[
++                    Icon(item.icon, size: 18),
++                    const SizedBox(width: 6),
++                    Text(item.label, style: const TextStyle(fontSize: 12)),
++                  ],
++                ),
++              ),
++            );
++          },
++        ),
++      );
++}
++
++class _MobileToolPanel extends StatelessWidget {
++  const _MobileToolPanel({
++    required this.features,
++    required this.supported,
++    required this.sliders,
++    required this.toggles,
++    required this.choices,
++    required this.dispatch,
++    required this.onSlider,
++    required this.onToggle,
++    required this.onChoice,
++  });
++
++  final List<EngineUiFeature> features;
++  final bool Function(String) supported;
++  final Map<String, double> sliders;
++  final Map<String, bool> toggles;
++  final Map<String, String> choices;
++  final Future<void> Function(String, String, [Object?]) dispatch;
++  final void Function(String, double) onSlider;
++  final void Function(String, bool) onToggle;
++  final void Function(String, String) onChoice;
++
++  @override
++  Widget build(BuildContext context) => ListView(
++        padding: const EdgeInsets.fromLTRB(8, 6, 8, 20),
++        children: <Widget>[
++          for (final feature in features) ...<Widget>[
++            Padding(
++              padding: const EdgeInsets.fromLTRB(4, 6, 4, 2),
++              child: Text(
++                feature.summary,
++                maxLines: 2,
++                overflow: TextOverflow.ellipsis,
++                style: Theme.of(context).textTheme.bodySmall,
++              ),
++            ),
++            _FeatureControls(
++              feature: feature,
++              supported: supported(feature.id),
++              sliders: sliders,
++              toggles: toggles,
++              choices: choices,
++              dispatch: dispatch,
++              onSlider: onSlider,
++              onToggle: onToggle,
++              onChoice: onChoice,
++            ),
++          ],
++        ],
++      );
+ }
+ 
+ class _WorkspaceRail extends StatelessWidget {
+--- a/lib/core/engine/engine_feature_catalog.dart
++++ b/lib/core/engine/engine_feature_catalog.dart
+@@ -90,7 +90,7 @@
+   EngineUiFeature(id: 'media.import', workspace: EngineWorkspace.media, title: 'Import Media', summary: 'Open/probe media through DigitorEngine and its platform host.', controls: [EngineUiControl.action('requestPicker', 'Import'), EngineUiControl.action('relink', 'Relink')]),
+   EngineUiFeature(id: 'media.decode', workspace: EngineWorkspace.media, title: 'Decode', summary: 'FFmpeg and qualified hardware decode paths including native surfaces.', controls: [EngineUiControl.choice('decoder', 'Decoder', ['Auto', 'Hardware', 'Software'])]),
+   EngineUiFeature(id: 'media.metadata', workspace: EngineWorkspace.media, title: 'Media Info', summary: 'Codec, dimensions, frame rate, timestamps and stream metadata.', controls: [EngineUiControl.action('inspect', 'Inspect')]),
+-  EngineUiFeature(id: 'media.zeroCopy', workspace: EngineWorkspace.media, title: 'Zero-copy Media', summary: 'Production native-surface import path and zero-copy qualification.', controls: [EngineUiControl.toggle('enabled', 'Prefer zero-copy')]),
++  EngineUiFeature(id: 'media.zeroCopy', workspace: EngineWorkspace.media, title: 'Zero-copy Media', summary: 'Engine-managed production native-surface import and zero-copy qualification.'),
+ 
+   // Timeline / professional editing
+   EngineUiFeature(id: 'timeline.multitrack', workspace: EngineWorkspace.edit, title: 'Multitrack Timeline', summary: 'Engine-owned video/audio tracks and timeline completion state.', controls: [EngineUiControl.action('addVideoTrack', 'Video Track'), EngineUiControl.action('addAudioTrack', 'Audio Track')]),
