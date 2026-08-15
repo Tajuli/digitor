@@ -234,10 +234,18 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
       if (action == 'color.primaryWheels.reset') {
         _flags.remove('primary.enabled');
+        _values.removeWhere((key, _) => key.startsWith('primary.'));
         await _rebuildSelectedOperations();
         return;
       }
       if (action == 'color.primaryWheels.open') {
+        _flags['primary.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action.startsWith('color.primaryWheels.') && value is num) {
+        final key = action.substring('color.primaryWheels.'.length);
+        _values['primary.$key'] = value.toDouble();
         _flags['primary.enabled'] = true;
         await _rebuildSelectedOperations();
         return;
@@ -443,25 +451,62 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     await _rebuildSelectedOperations();
   }
 
+  double _correctionValue(String key) {
+    final value = _values['correction.$key'];
+    if (value == null) return 0;
+    switch (key) {
+      case 'exposure':
+        return value / 5.0;
+      case 'saturation':
+        return value - 1.0;
+      case 'hue':
+        return value / 180.0;
+      default:
+        return value;
+    }
+  }
+
+  DigitorPrimaryWheel _primaryWheel(
+    String name, {
+    required double identityRgb,
+    required double identityMaster,
+  }) {
+    return DigitorPrimaryWheel(
+      rgb: DigitorRgb(
+        _values['primary.${name}R'] ?? identityRgb,
+        _values['primary.${name}G'] ?? identityRgb,
+        _values['primary.${name}B'] ?? identityRgb,
+      ),
+      master: _values['primary.${name}Master'] ?? identityMaster,
+    );
+  }
+
   Future<void> _rebuildSelectedOperations() async {
     _w.clearSelectedOperations();
     if (_values.keys.any((key) => key.startsWith('correction.'))) {
       _w.addCorrection(
         DigitorCorrection(
-          exposure: _values['correction.exposure'] ?? 0,
-          contrast: _values['correction.contrast'] ?? 0,
-          saturation: _values['correction.saturation'] ?? 0,
-          temperature: _values['correction.temperature'] ?? 0,
-          tint: _values['correction.tint'] ?? 0,
-          highlights: _values['correction.highlights'] ?? 0,
-          shadows: _values['correction.shadows'] ?? 0,
-          hue: _values['correction.hue'] ?? 0,
-          colorBoost: _values['correction.colorBoost'] ?? 0,
+          exposure: _correctionValue('exposure'),
+          contrast: _correctionValue('contrast'),
+          saturation: _correctionValue('saturation'),
+          temperature: _correctionValue('temperature'),
+          tint: _correctionValue('tint'),
+          highlights: _correctionValue('highlights'),
+          shadows: _correctionValue('shadows'),
+          hue: _correctionValue('hue'),
+          colorBoost: _correctionValue('colorBoost'),
         ),
       );
     }
     if (_flags['primary.enabled'] == true) {
-      _w.addPrimaryWheels(const DigitorPrimaryWheels());
+      _w.addPrimaryWheels(
+        DigitorPrimaryWheels(
+          lift: _primaryWheel('lift', identityRgb: 0, identityMaster: 0),
+          gamma: _primaryWheel('gamma', identityRgb: 1, identityMaster: 1),
+          gain: _primaryWheel('gain', identityRgb: 1, identityMaster: 1),
+          offset: _primaryWheel('offset', identityRgb: 0, identityMaster: 0),
+        ),
+      );
     }
     if (_flags['log.enabled'] == true) {
       _w.addLogWheels(const DigitorLogWheels());
