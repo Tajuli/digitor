@@ -28,6 +28,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   int _lastPreviewPositionUs = -1;
   int _lastPreviewGraphRevision = -1;
   int _lastPreviewParameterRevision = -1;
+  DigitorExportFormat _exportFormat = DigitorExportFormat.mp4;
+  DigitorVideoCodec _exportCodec = DigitorVideoCodec.h264;
 
   final Map<String, double> _values = <String, double>{};
   final Map<String, bool> _flags = <String, bool>{};
@@ -209,6 +211,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'playback.transport',
       'runtime.backend',
       'export.production',
+      'export.format',
     };
     if (id == 'export.production') return workspace.productionHostRegistered;
     return direct.contains(id);
@@ -371,6 +374,29 @@ final class DigitorFfiEngineGateway implements EngineGateway {
           'measuredLatencyUs': sync.measuredLatencyUs,
           'effectiveOffsetUs': sync.effectiveOffsetUs,
         });
+        return;
+      }
+
+      if (action == 'export.format.profile' && value is String) {
+        switch (value) {
+          case 'MP4 · H.264':
+            _exportFormat = DigitorExportFormat.mp4;
+            _exportCodec = DigitorVideoCodec.h264;
+            break;
+          case 'MP4 · H.265 (HEVC)':
+            _exportFormat = DigitorExportFormat.mp4;
+            _exportCodec = DigitorVideoCodec.h265;
+            break;
+          default:
+            throw ArgumentError.value(
+              value, 'value', 'Unsupported production export profile.');
+        }
+        _event('exportProfileChanged', <String, Object?>{
+          'format': _exportFormat.name,
+          'codec': _exportCodec.name,
+          'profile': value,
+        });
+        _emitSnapshot(message: 'Export profile $value');
         return;
       }
 
@@ -660,6 +686,15 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     await _renderPreview(force: true);
   }
 
+  String _normalizedExportPath(String path) {
+    const extension = '.mp4';
+    if (path.toLowerCase().endsWith(extension)) return path;
+    final separator = math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    final dot = path.lastIndexOf('.');
+    if (dot > separator) return '${path.substring(0, dot)}$extension';
+    return '$path$extension';
+  }
+
   Future<void> _exportCurrentMedia() async {
     final media = _w.media;
     if (media == null || _mediaPath == null) {
@@ -679,6 +714,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       _event('exportLocationRequired', const <String, Object?>{});
       return;
     }
+    final outputPath = _normalizedExportPath(location.path);
 
     final status = _w.timelineStatus();
     final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
@@ -701,19 +737,23 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     );
 
     _event('exportStarted', <String, Object?>{
-      'path': location.path,
+      'path': outputPath,
       'frames': frameCount,
       'durationUs': durationUs,
+      'format': _exportFormat.name,
+      'codec': _exportCodec.name,
     });
     _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
     await Future<void>.delayed(Duration.zero);
 
     _w.exportMedia(
-      path: location.path,
+      path: outputPath,
       firstFrame: firstFrame,
       lastFrame: lastFrame,
       width: media.firstFrame.width,
       height: media.firstFrame.height,
+      format: _exportFormat,
+      codec: _exportCodec,
       onProgress: (progress) {
         if (!_disposed) {
           _progressController.add(
@@ -725,8 +765,12 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     if (!_disposed) {
       _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
     }
-    _debug('export completed ${location.path}');
-    _event('exportCompleted', <String, Object?>{'path': location.path});
+    _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
+    _event('exportCompleted', <String, Object?>{
+      'path': outputPath,
+      'format': _exportFormat.name,
+      'codec': _exportCodec.name,
+    });
   }
 
   void _emitDiagnostics() {
