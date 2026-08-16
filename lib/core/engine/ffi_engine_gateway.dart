@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_selector/file_selector.dart';
@@ -30,6 +31,25 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
   final Map<String, double> _values = <String, double>{};
   final Map<String, bool> _flags = <String, bool>{};
+  final Map<String, List<DigitorCurvePoint>> _curvePoints =
+      <String, List<DigitorCurvePoint>>{
+    'master': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'red': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'green': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'blue': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+  };
 
   @override
   Stream<EngineSnapshot> get snapshots => _snapshotController.stream;
@@ -211,6 +231,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         _previewTextureId = null;
         _values.clear();
         _flags.clear();
+        _resetCurves();
         _emitSnapshot(message: 'New project');
         return;
       }
@@ -250,8 +271,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         await _rebuildSelectedOperations();
         return;
       }
+
       if (action == 'color.logWheels.reset') {
         _flags.remove('log.enabled');
+        _values.removeWhere((key, _) => key.startsWith('log.'));
         await _rebuildSelectedOperations();
         return;
       }
@@ -260,7 +283,22 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         await _rebuildSelectedOperations();
         return;
       }
+      if (action.startsWith('color.logWheels.') && value is num) {
+        final key = action.substring('color.logWheels.'.length);
+        _values['log.$key'] = value.toDouble();
+        _flags['log.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+
       if (action == 'color.rgbCurves.reset') {
+        _resetCurves();
+        _flags['curves.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.rgbCurves.points') {
+        _setCurvePoints(value);
         _flags['curves.enabled'] = true;
         await _rebuildSelectedOperations();
         return;
@@ -483,6 +521,89 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     );
   }
 
+  DigitorLogWheel _logWheel(String name) => DigitorLogWheel(
+        rgb: DigitorRgb(
+          _values['log.$name.r'] ?? 0,
+          _values['log.$name.g'] ?? 0,
+          _values['log.$name.b'] ?? 0,
+        ),
+        master: _values['log.$name.master'] ?? 0,
+      );
+
+  DigitorLogWheels _logWheels() {
+    final rawShadow = (_values['log.shadowPivot'] ?? 0.33).clamp(0.05, 0.60).toDouble();
+    final rawHighlight =
+        (_values['log.highlightPivot'] ?? 0.67).clamp(0.40, 0.95).toDouble();
+    final shadow = math.min(rawShadow, rawHighlight - 0.01).clamp(0.05, 0.60).toDouble();
+    final highlight = math.max(rawHighlight, shadow + 0.01).clamp(0.40, 0.95).toDouble();
+    return DigitorLogWheels(
+      shadows: _logWheel('shadows'),
+      midtones: _logWheel('midtones'),
+      highlights: _logWheel('highlights'),
+      global: _logWheel('global'),
+      shadowPivot: shadow,
+      highlightPivot: highlight,
+      transitionWidth:
+          (_values['log.transitionWidth'] ?? 0.10).clamp(0.01, 0.30).toDouble(),
+    );
+  }
+
+  void _resetCurves() {
+    for (final channel in const <String>['master', 'red', 'green', 'blue']) {
+      _curvePoints[channel] = <DigitorCurvePoint>[
+        const DigitorCurvePoint(0, 0),
+        const DigitorCurvePoint(1, 1),
+      ];
+    }
+  }
+
+  void _setCurvePoints(Object? value) {
+    if (value is! Map) {
+      throw ArgumentError('RGB curve point payload must be a map.');
+    }
+    final channel = value['channel']?.toString().toLowerCase();
+    if (!_curvePoints.containsKey(channel)) {
+      throw ArgumentError('RGB curve channel is invalid: $channel');
+    }
+    final rawPoints = value['points'];
+    if (rawPoints is! List || rawPoints.length < 2) {
+      throw ArgumentError('RGB curve requires at least two points.');
+    }
+    final parsed = <DigitorCurvePoint>[];
+    for (final raw in rawPoints) {
+      if (raw is! Map || raw['x'] is! num || raw['y'] is! num) {
+        throw ArgumentError('RGB curve point must contain numeric x/y values.');
+      }
+      final x = (raw['x'] as num).toDouble();
+      final y = (raw['y'] as num).toDouble();
+      if (!x.isFinite || !y.isFinite) {
+        throw ArgumentError('RGB curve point values must be finite.');
+      }
+      parsed.add(
+        DigitorCurvePoint(
+          x.clamp(0.0, 1.0).toDouble(),
+          y.clamp(0.0, 1.0).toDouble(),
+        ),
+      );
+    }
+    parsed.sort((a, b) => a.x.compareTo(b.x));
+    parsed[0] = DigitorCurvePoint(0, parsed.first.y);
+    parsed[parsed.length - 1] = DigitorCurvePoint(1, parsed.last.y);
+    for (var i = 1; i < parsed.length; i++) {
+      if (parsed[i].x <= parsed[i - 1].x) {
+        throw ArgumentError('RGB curve x positions must be strictly increasing.');
+      }
+    }
+    _curvePoints[channel!] = List<DigitorCurvePoint>.unmodifiable(parsed);
+  }
+
+  DigitorRgbCurves _rgbCurves() => DigitorRgbCurves(
+        master: DigitorCurveChannel(points: _curvePoints['master']!),
+        red: DigitorCurveChannel(points: _curvePoints['red']!),
+        green: DigitorCurveChannel(points: _curvePoints['green']!),
+        blue: DigitorCurveChannel(points: _curvePoints['blue']!),
+      );
+
   Future<void> _rebuildSelectedOperations() async {
     _w.clearSelectedOperations();
     if (_values.keys.any((key) => key.startsWith('correction.'))) {
@@ -511,10 +632,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       );
     }
     if (_flags['log.enabled'] == true) {
-      _w.addLogWheels(const DigitorLogWheels());
+      _w.addLogWheels(_logWheels());
     }
     if (_flags['curves.enabled'] == true) {
-      _w.addRgbCurves(const DigitorRgbCurves());
+      _w.addRgbCurves(_rgbCurves());
     }
     if (_flags.containsKey('qualifier.highlight')) {
       _w.addHslQualifier(
@@ -579,7 +700,14 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'durationUs=$durationUs frameDurationUs=$frameDurationUs',
     );
 
+    _event('exportStarted', <String, Object?>{
+      'path': location.path,
+      'frames': frameCount,
+      'durationUs': durationUs,
+    });
     _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
+    await Future<void>.delayed(Duration.zero);
+
     _w.exportMedia(
       path: location.path,
       firstFrame: firstFrame,
@@ -594,6 +722,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         }
       },
     );
+    if (!_disposed) {
+      _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+    }
+    _debug('export completed ${location.path}');
     _event('exportCompleted', <String, Object?>{'path': location.path});
   }
 
