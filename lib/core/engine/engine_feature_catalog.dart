@@ -186,8 +186,8 @@ const List<EngineUiFeature> engineFeatureCatalog = <EngineUiFeature>[
   EngineUiFeature(id: 'runtime.pressure', workspace: EngineWorkspace.performance, title: 'Thermal / Memory Pressure', summary: 'Adaptive thermal and memory-pressure controls.', controls: [EngineUiControl.action('status', 'Status')]),
 
   // Export
-  EngineUiFeature(id: 'export.production', workspace: EngineWorkspace.export, title: 'Production Export', summary: 'Shared timeline render path with progress, errors and cancellation.', controls: [EngineUiControl.action('configure', 'Settings'), EngineUiControl.action('start', 'Export')]),
-  EngineUiFeature(id: 'export.format', workspace: EngineWorkspace.export, title: 'Container / Codec', summary: 'MP4, MOV, Matroska, image sequence and supported FFmpeg codecs.', controls: [EngineUiControl.choice('container', 'Container', ['MP4', 'MOV', 'Matroska', 'Image Sequence']), EngineUiControl.choice('encoder', 'Encoder', ['Auto', 'Hardware', 'Software'])]),
+  EngineUiFeature(id: 'export.format', workspace: EngineWorkspace.export, title: 'File Type / Codec', summary: 'Native production MP4 export with the selected video codec.', controls: [EngineUiControl.choice('profile', 'File Type / Codec', ['MP4 · H.264', 'MP4 · H.265 (HEVC)'])]),
+  EngineUiFeature(id: 'export.production', workspace: EngineWorkspace.export, title: 'Production Export', summary: 'Shared timeline render path with progress, errors and cancellation.', controls: [EngineUiControl.action('start', 'Export')]),
   EngineUiFeature(id: 'export.jobs', workspace: EngineWorkspace.export, title: 'Async Export Jobs', summary: 'Asynchronous jobs, progress, cancellation and error reporting.', controls: [EngineUiControl.action('queue', 'Queue'), EngineUiControl.action('cancel', 'Cancel')]),
   EngineUiFeature(id: 'export.resume', workspace: EngineWorkspace.export, title: 'Resumable Segment Export', summary: 'Segmented/resumable export workflow.', controls: [EngineUiControl.toggle('enabled', 'Resumable')]),
 

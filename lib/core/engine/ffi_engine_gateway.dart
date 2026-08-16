@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_selector/file_selector.dart';
@@ -27,9 +28,30 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   int _lastPreviewPositionUs = -1;
   int _lastPreviewGraphRevision = -1;
   int _lastPreviewParameterRevision = -1;
+  DigitorExportFormat _exportFormat = DigitorExportFormat.mp4;
+  DigitorVideoCodec _exportCodec = DigitorVideoCodec.h264;
 
   final Map<String, double> _values = <String, double>{};
   final Map<String, bool> _flags = <String, bool>{};
+  final Map<String, List<DigitorCurvePoint>> _curvePoints =
+      <String, List<DigitorCurvePoint>>{
+    'master': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'red': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'green': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+    'blue': <DigitorCurvePoint>[
+      const DigitorCurvePoint(0, 0),
+      const DigitorCurvePoint(1, 1),
+    ],
+  };
 
   @override
   Stream<EngineSnapshot> get snapshots => _snapshotController.stream;
@@ -189,6 +211,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'playback.transport',
       'runtime.backend',
       'export.production',
+      'export.format',
     };
     if (id == 'export.production') return workspace.productionHostRegistered;
     return direct.contains(id);
@@ -211,6 +234,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         _previewTextureId = null;
         _values.clear();
         _flags.clear();
+        _resetCurves();
         _emitSnapshot(message: 'New project');
         return;
       }
@@ -250,8 +274,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         await _rebuildSelectedOperations();
         return;
       }
+
       if (action == 'color.logWheels.reset') {
         _flags.remove('log.enabled');
+        _values.removeWhere((key, _) => key.startsWith('log.'));
         await _rebuildSelectedOperations();
         return;
       }
@@ -260,7 +286,22 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         await _rebuildSelectedOperations();
         return;
       }
+      if (action.startsWith('color.logWheels.') && value is num) {
+        final key = action.substring('color.logWheels.'.length);
+        _values['log.$key'] = value.toDouble();
+        _flags['log.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+
       if (action == 'color.rgbCurves.reset') {
+        _resetCurves();
+        _flags['curves.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+      if (action == 'color.rgbCurves.points') {
+        _setCurvePoints(value);
         _flags['curves.enabled'] = true;
         await _rebuildSelectedOperations();
         return;
@@ -336,6 +377,29 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         return;
       }
 
+      if (action == 'export.format.profile' && value is String) {
+        switch (value) {
+          case 'MP4 · H.264':
+            _exportFormat = DigitorExportFormat.mp4;
+            _exportCodec = DigitorVideoCodec.h264;
+            break;
+          case 'MP4 · H.265 (HEVC)':
+            _exportFormat = DigitorExportFormat.mp4;
+            _exportCodec = DigitorVideoCodec.h265;
+            break;
+          default:
+            throw ArgumentError.value(
+              value, 'value', 'Unsupported production export profile.');
+        }
+        _event('exportProfileChanged', <String, Object?>{
+          'format': _exportFormat.name,
+          'codec': _exportCodec.name,
+          'profile': value,
+        });
+        _emitSnapshot(message: 'Export profile $value');
+        return;
+      }
+
       if (action == 'export.production.start') {
         await _exportCurrentMedia();
         return;
@@ -371,6 +435,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'hardwareAccelerated': media.decoder.hardwareAccelerated,
       'nativeSurfaceOutput': media.decoder.nativeSurfaceOutput,
       'strictGpuPath': media.strictGpuPath,
+      'durationUs': media.duration.inMicroseconds,
+      'frameDurationUs': media.firstFrame.duration.inMicroseconds,
       'width': media.firstFrame.width,
       'height': media.firstFrame.height,
       'pixelFormat': media.firstFrame.pixelFormat.name,
@@ -481,6 +547,89 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     );
   }
 
+  DigitorLogWheel _logWheel(String name) => DigitorLogWheel(
+        rgb: DigitorRgb(
+          _values['log.$name.r'] ?? 0,
+          _values['log.$name.g'] ?? 0,
+          _values['log.$name.b'] ?? 0,
+        ),
+        master: _values['log.$name.master'] ?? 0,
+      );
+
+  DigitorLogWheels _logWheels() {
+    final rawShadow = (_values['log.shadowPivot'] ?? 0.33).clamp(0.05, 0.60).toDouble();
+    final rawHighlight =
+        (_values['log.highlightPivot'] ?? 0.67).clamp(0.40, 0.95).toDouble();
+    final shadow = math.min(rawShadow, rawHighlight - 0.01).clamp(0.05, 0.60).toDouble();
+    final highlight = math.max(rawHighlight, shadow + 0.01).clamp(0.40, 0.95).toDouble();
+    return DigitorLogWheels(
+      shadows: _logWheel('shadows'),
+      midtones: _logWheel('midtones'),
+      highlights: _logWheel('highlights'),
+      global: _logWheel('global'),
+      shadowPivot: shadow,
+      highlightPivot: highlight,
+      transitionWidth:
+          (_values['log.transitionWidth'] ?? 0.10).clamp(0.01, 0.30).toDouble(),
+    );
+  }
+
+  void _resetCurves() {
+    for (final channel in const <String>['master', 'red', 'green', 'blue']) {
+      _curvePoints[channel] = <DigitorCurvePoint>[
+        const DigitorCurvePoint(0, 0),
+        const DigitorCurvePoint(1, 1),
+      ];
+    }
+  }
+
+  void _setCurvePoints(Object? value) {
+    if (value is! Map) {
+      throw ArgumentError('RGB curve point payload must be a map.');
+    }
+    final channel = value['channel']?.toString().toLowerCase();
+    if (!_curvePoints.containsKey(channel)) {
+      throw ArgumentError('RGB curve channel is invalid: $channel');
+    }
+    final rawPoints = value['points'];
+    if (rawPoints is! List || rawPoints.length < 2) {
+      throw ArgumentError('RGB curve requires at least two points.');
+    }
+    final parsed = <DigitorCurvePoint>[];
+    for (final raw in rawPoints) {
+      if (raw is! Map || raw['x'] is! num || raw['y'] is! num) {
+        throw ArgumentError('RGB curve point must contain numeric x/y values.');
+      }
+      final x = (raw['x'] as num).toDouble();
+      final y = (raw['y'] as num).toDouble();
+      if (!x.isFinite || !y.isFinite) {
+        throw ArgumentError('RGB curve point values must be finite.');
+      }
+      parsed.add(
+        DigitorCurvePoint(
+          x.clamp(0.0, 1.0).toDouble(),
+          y.clamp(0.0, 1.0).toDouble(),
+        ),
+      );
+    }
+    parsed.sort((a, b) => a.x.compareTo(b.x));
+    parsed[0] = DigitorCurvePoint(0, parsed.first.y);
+    parsed[parsed.length - 1] = DigitorCurvePoint(1, parsed.last.y);
+    for (var i = 1; i < parsed.length; i++) {
+      if (parsed[i].x <= parsed[i - 1].x) {
+        throw ArgumentError('RGB curve x positions must be strictly increasing.');
+      }
+    }
+    _curvePoints[channel!] = List<DigitorCurvePoint>.unmodifiable(parsed);
+  }
+
+  DigitorRgbCurves _rgbCurves() => DigitorRgbCurves(
+        master: DigitorCurveChannel(points: _curvePoints['master']!),
+        red: DigitorCurveChannel(points: _curvePoints['red']!),
+        green: DigitorCurveChannel(points: _curvePoints['green']!),
+        blue: DigitorCurveChannel(points: _curvePoints['blue']!),
+      );
+
   Future<void> _rebuildSelectedOperations() async {
     _w.clearSelectedOperations();
     if (_values.keys.any((key) => key.startsWith('correction.'))) {
@@ -509,10 +658,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       );
     }
     if (_flags['log.enabled'] == true) {
-      _w.addLogWheels(const DigitorLogWheels());
+      _w.addLogWheels(_logWheels());
     }
     if (_flags['curves.enabled'] == true) {
-      _w.addRgbCurves(const DigitorRgbCurves());
+      _w.addRgbCurves(_rgbCurves());
     }
     if (_flags.containsKey('qualifier.highlight')) {
       _w.addHslQualifier(
@@ -537,6 +686,15 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     await _renderPreview(force: true);
   }
 
+  String _normalizedExportPath(String path) {
+    const extension = '.mp4';
+    if (path.toLowerCase().endsWith(extension)) return path;
+    final separator = math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    final dot = path.lastIndexOf('.');
+    if (dot > separator) return '${path.substring(0, dot)}$extension';
+    return '$path$extension';
+  }
+
   Future<void> _exportCurrentMedia() async {
     final media = _w.media;
     if (media == null || _mediaPath == null) {
@@ -556,22 +714,46 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       _event('exportLocationRequired', const <String, Object?>{});
       return;
     }
+    final outputPath = _normalizedExportPath(location.path);
 
     final status = _w.timelineStatus();
     final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
         ? media.firstFrame.duration.inMicroseconds
         : 33333;
-    final lastFrame = status.durationUs > 0
-        ? (status.durationUs / frameDurationUs).ceil().clamp(0, 1 << 30).toInt()
-        : media.firstFrame.frameNumber;
+    final durationUs = status.durationUs > 0
+        ? status.durationUs
+        : media.duration.inMicroseconds;
+    if (durationUs <= 0) {
+      throw StateError('Native media duration is unavailable for full export.');
+    }
+    final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
+        .clamp(1, 1 << 30)
+        .toInt();
+    final firstFrame = media.firstFrame.frameNumber;
+    final lastFrame = firstFrame + frameCount - 1;
+    _debug(
+      'export range first=$firstFrame last=$lastFrame frames=$frameCount '
+      'durationUs=$durationUs frameDurationUs=$frameDurationUs',
+    );
 
+    _event('exportStarted', <String, Object?>{
+      'path': outputPath,
+      'frames': frameCount,
+      'durationUs': durationUs,
+      'format': _exportFormat.name,
+      'codec': _exportCodec.name,
+    });
     _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
+    await Future<void>.delayed(Duration.zero);
+
     _w.exportMedia(
-      path: location.path,
-      firstFrame: media.firstFrame.frameNumber,
+      path: outputPath,
+      firstFrame: firstFrame,
       lastFrame: lastFrame,
       width: media.firstFrame.width,
       height: media.firstFrame.height,
+      format: _exportFormat,
+      codec: _exportCodec,
       onProgress: (progress) {
         if (!_disposed) {
           _progressController.add(
@@ -580,7 +762,15 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         }
       },
     );
-    _event('exportCompleted', <String, Object?>{'path': location.path});
+    if (!_disposed) {
+      _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+    }
+    _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
+    _event('exportCompleted', <String, Object?>{
+      'path': outputPath,
+      'format': _exportFormat.name,
+      'codec': _exportCodec.name,
+    });
   }
 
   void _emitDiagnostics() {
