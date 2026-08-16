@@ -14,7 +14,7 @@ dependencies:
     git:
       url: https://github.com/Tajuli/DigitorEngine.git
       path: dart/digitor_engine_ffi
-      ref: 8da2bf0ccd5ef0b35bcdef6b60ba66623dc30656
+      ref: 93b9fd68ccbc6887e6612c193fa1f6d3c97708dc
 
   file_selector: ^1.1.0
 
