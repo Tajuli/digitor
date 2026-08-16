@@ -371,6 +371,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'hardwareAccelerated': media.decoder.hardwareAccelerated,
       'nativeSurfaceOutput': media.decoder.nativeSurfaceOutput,
       'strictGpuPath': media.strictGpuPath,
+      'durationUs': media.duration.inMicroseconds,
+      'frameDurationUs': media.firstFrame.duration.inMicroseconds,
       'width': media.firstFrame.width,
       'height': media.firstFrame.height,
       'pixelFormat': media.firstFrame.pixelFormat.name,
@@ -561,14 +563,26 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
         ? media.firstFrame.duration.inMicroseconds
         : 33333;
-    final lastFrame = status.durationUs > 0
-        ? (status.durationUs / frameDurationUs).ceil().clamp(0, 1 << 30).toInt()
-        : media.firstFrame.frameNumber;
+    final durationUs = status.durationUs > 0
+        ? status.durationUs
+        : media.duration.inMicroseconds;
+    if (durationUs <= 0) {
+      throw StateError('Native media duration is unavailable for full export.');
+    }
+    final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
+        .clamp(1, 1 << 30)
+        .toInt();
+    final firstFrame = media.firstFrame.frameNumber;
+    final lastFrame = firstFrame + frameCount - 1;
+    _debug(
+      'export range first=$firstFrame last=$lastFrame frames=$frameCount '
+      'durationUs=$durationUs frameDurationUs=$frameDurationUs',
+    );
 
     _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
     _w.exportMedia(
       path: location.path,
-      firstFrame: media.firstFrame.frameNumber,
+      firstFrame: firstFrame,
       lastFrame: lastFrame,
       width: media.firstFrame.width,
       height: media.firstFrame.height,
