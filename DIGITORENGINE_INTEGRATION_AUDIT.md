@@ -1,12 +1,14 @@
 # DigitorEngine integration audit
 
-Audited engine commit: `9106435d0cc724b9376a3bba0bf435d0c0a914b3`
+Audited engine commit: `c18a1f39f2ef58b00c91d0a63348090d3e1455ae`
 
 ## Result
 
 Digitor is intentionally a Flutter presentation client. DigitorEngine remains the authoritative editor/runtime.
 
 The current Digitor dependency is pinned to the audited DigitorEngine commit through the `digitor_engine_ffi` package. The app does not vendor or duplicate DigitorEngine native rendering code.
+
+The audited Engine commit also fixes Android native-asset CMake configuration by explicitly selecting Ninja and resolving its executable from the Android SDK CMake installation (with PATH fallback). This prevents Windows host CMake defaults such as Visual Studio/MSBuild or NMake from being selected during Android cross-compilation.
 
 ## Verified ownership
 
@@ -37,6 +39,7 @@ The current Digitor dependency is pinned to the audited DigitorEngine commit thr
 4. The Engine's own release audit states portable CI does not prove physical GPU execution, native texture registration, zero-copy interop or hardware encoding. Those remain real-device qualification items.
 5. Historical implementation truth tables distinguish source implementation from hardware qualification. App UI must therefore report runtime capability rather than assume every GPU path is available on every machine.
 6. The current Flutter plugin package declares Android, iOS, macOS and Windows hosts, so platform-family UI routing belongs in the Digitor presentation layer rather than in native rendering code.
+7. Android native assets must configure CMake with the Android NDK toolchain and Ninja explicitly; host-native generators are not valid for this cross-compilation path.
 
 ## Integration rule
 
