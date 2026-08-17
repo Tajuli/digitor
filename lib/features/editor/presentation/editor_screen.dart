@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'professional_color_wheels.dart';
+
 import '../../../core/engine/engine_feature_catalog.dart';
 import '../../../core/engine/engine_gateway.dart';
 
@@ -163,6 +165,9 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   Widget build(BuildContext context) {
     final inspectorFeature = selectedFeature;
+    final wideColorWheels = inspectorFeature?.id == 'color.primaryWheels' ||
+        inspectorFeature?.id == 'color.logWheels';
+    final inspectorWidth = wideColorWheels ? 620.0 : 350.0;
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -227,7 +232,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   ),
                   const VerticalDivider(width: 1),
                   SizedBox(
-                    width: 350,
+                    width: inspectorWidth,
                     child: ListView(
                       padding: const EdgeInsets.all(10),
                       children: <Widget>[
@@ -794,8 +799,17 @@ class _FeatureControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (feature.id == 'color.primaryWheels') {
+      return ProfessionalPrimaryWheelsControls(
+        supported: supported,
+        dispatch: dispatch,
+      );
+    }
     if (feature.id == 'color.logWheels') {
-      return _LogWheelsControls(supported: supported, dispatch: dispatch);
+      return ProfessionalLogWheelsControls(
+        supported: supported,
+        dispatch: dispatch,
+      );
     }
     if (feature.id == 'color.rgbCurves') {
       return _RgbCurvesControls(supported: supported, dispatch: dispatch);

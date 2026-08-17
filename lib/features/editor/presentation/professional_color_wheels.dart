@@ -591,7 +591,6 @@ class _WheelTile extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 9.5,
                       color: Colors.white70,
-                      fontFeatures: <FontFeature>[],
                     ),
                   ),
                 ),
@@ -617,7 +616,7 @@ class _ColorWheelSurface extends StatelessWidget {
 
   Offset _normalized(Offset local, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.max(1.0, math.min(size.width, size.height) / 2 - 6);
+    final radius = math.max(1.0, math.min(size.width, size.height) / 2 - 6).toDouble();
     var delta = local - center;
     if (delta.distance > radius) {
       delta = Offset.fromDirection(delta.direction, radius);
@@ -661,7 +660,7 @@ class _ColorWheelPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.max(1.0, math.min(size.width, size.height) / 2 - 6);
+    final radius = math.max(1.0, math.min(size.width, size.height) / 2 - 6).toDouble();
     final rect = Rect.fromCircle(center: center, radius: radius);
 
     canvas.drawCircle(
@@ -771,7 +770,6 @@ class _RgbReadout extends StatelessWidget {
             style: const TextStyle(
               fontSize: 8.5,
               color: Colors.white60,
-              fontFeatures: <FontFeature>[],
             ),
           ),
         ),
@@ -873,7 +871,7 @@ class _PrimaryWheelSpec {
 }
 
 (double, double, double) _chromaticDelta(Offset puck) {
-  final radius = math.min(1.0, math.sqrt(puck.dx * puck.dx + puck.dy * puck.dy));
+  final radius = math.min(1.0, math.sqrt(puck.dx * puck.dx + puck.dy * puck.dy)).toDouble();
   if (radius <= 0.000001) return (0, 0, 0);
 
   var hue = math.atan2(-puck.dy, puck.dx) / (math.pi * 2);
