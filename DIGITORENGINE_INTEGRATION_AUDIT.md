@@ -1,6 +1,6 @@
 # DigitorEngine integration audit
 
-Audited engine commit: `e1b0dab48652b9d708f955fea5103d4d9809d151`
+Audited engine commit: `23dd666f2d072f90dd65d4953773391521235303`
 
 ## Result
 
@@ -8,7 +8,7 @@ Digitor is intentionally a Flutter presentation client. DigitorEngine remains th
 
 The current Digitor dependency is pinned to the audited DigitorEngine commit through the `digitor_engine_ffi` package. The app does not vendor or duplicate DigitorEngine native rendering code.
 
-The audited Engine commit also fixes Android native-asset CMake configuration by explicitly selecting Ninja and resolving its executable from the Android SDK CMake installation (with PATH fallback). This prevents Windows host CMake defaults such as Visual Studio/MSBuild or NMake from being selected during Android cross-compilation.
+The audited Engine commit fixes Android native-asset CMake configuration by explicitly selecting Ninja and resolving its executable from the Android SDK CMake installation (with PATH fallback). It also opens app-local Android media through a native file descriptor before passing it to `AMediaExtractor`, avoiding the URI-style data-source path for Flutter picker cache files.
 
 ## Verified ownership
 
@@ -40,6 +40,8 @@ The audited Engine commit also fixes Android native-asset CMake configuration by
 5. Historical implementation truth tables distinguish source implementation from hardware qualification. App UI must therefore report runtime capability rather than assume every GPU path is available on every machine.
 6. The current Flutter plugin package declares Android, iOS, macOS and Windows hosts, so platform-family UI routing belongs in the Digitor presentation layer rather than in native rendering code.
 7. Android native assets must configure CMake with the Android NDK toolchain and Ninja explicitly; host-native generators are not valid for this cross-compilation path.
+8. Android picker cache files are opened by the Engine and supplied to NDK `AMediaExtractor` through `AMediaExtractor_setDataSourceFd`; Flutter does not decode or transform the media.
+9. `productionHostRegistered=false` remains a separate production-provider registration condition and must not be bypassed by UI code or treated as ready without real Engine-owned dependencies.
 
 ## Integration rule
 
@@ -52,6 +54,10 @@ The app dependency must remain pinned to an audited DigitorEngine commit. Updati
 - Android and iOS must instantiate `MobileEditorScreen` regardless of phone/tablet width.
 - Windows and macOS must instantiate `EditorScreen` regardless of desktop window width.
 - Both UI families must send commands through the same `EngineGateway` and render the same Engine-owned preview texture/state.
+
+## Android qualification
+
+A physical Symphony Z60 / Mali-G57 successfully built, installed and initialized DigitorEngine with Vulkan after the native-assets Ninja fix. The app-local MediaExtractor FD change still requires a physical-device import retest. Production-host registration also remains independently visible through runtime capability state.
 
 ## Windows qualification
 
