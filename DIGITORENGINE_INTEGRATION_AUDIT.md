@@ -1,6 +1,6 @@
 # DigitorEngine integration audit
 
-Audited engine commit: `c18a1f39f2ef58b00c91d0a63348090d3e1455ae`
+Audited engine commit: `e1b0dab48652b9d708f955fea5103d4d9809d151`
 
 ## Result
 
