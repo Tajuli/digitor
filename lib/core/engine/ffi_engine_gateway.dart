@@ -256,6 +256,35 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         return;
       }
 
+      if (action == 'color.primaryWheels.setWheel' && value is Map) {
+        final name = value['name']?.toString();
+        if (name == null ||
+            !const <String>{'lift', 'gamma', 'gain', 'offset'}.contains(name)) {
+          throw ArgumentError.value(name, 'name', 'Invalid Primary Wheels range.');
+        }
+        final r = value['r'];
+        final g = value['g'];
+        final b = value['b'];
+        final master = value['master'];
+        if (r is! num || g is! num || b is! num || master is! num) {
+          throw ArgumentError('Primary Wheels batch values must be numeric.');
+        }
+        final rv = r.toDouble();
+        final gv = g.toDouble();
+        final bv = b.toDouble();
+        final mv = master.toDouble();
+        if (!rv.isFinite || !gv.isFinite || !bv.isFinite || !mv.isFinite) {
+          throw ArgumentError('Primary Wheels batch values must be finite.');
+        }
+        _values['primary.${name}R'] = rv;
+        _values['primary.${name}G'] = gv;
+        _values['primary.${name}B'] = bv;
+        _values['primary.${name}Master'] = mv;
+        _flags['primary.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+
       if (action == 'color.primaryWheels.reset') {
         _flags.remove('primary.enabled');
         _values.removeWhere((key, _) => key.startsWith('primary.'));
@@ -271,6 +300,36 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         final key = action.substring('color.primaryWheels.'.length);
         _values['primary.$key'] = value.toDouble();
         _flags['primary.enabled'] = true;
+        await _rebuildSelectedOperations();
+        return;
+      }
+
+      if (action == 'color.logWheels.setWheel' && value is Map) {
+        final range = value['range']?.toString();
+        if (range == null ||
+            !const <String>{'shadows', 'midtones', 'highlights', 'global'}
+                .contains(range)) {
+          throw ArgumentError.value(range, 'range', 'Invalid Log Wheels range.');
+        }
+        final r = value['r'];
+        final g = value['g'];
+        final b = value['b'];
+        final master = value['master'];
+        if (r is! num || g is! num || b is! num || master is! num) {
+          throw ArgumentError('Log Wheels batch values must be numeric.');
+        }
+        final rv = r.toDouble();
+        final gv = g.toDouble();
+        final bv = b.toDouble();
+        final mv = master.toDouble();
+        if (!rv.isFinite || !gv.isFinite || !bv.isFinite || !mv.isFinite) {
+          throw ArgumentError('Log Wheels batch values must be finite.');
+        }
+        _values['log.$range.r'] = rv;
+        _values['log.$range.g'] = gv;
+        _values['log.$range.b'] = bv;
+        _values['log.$range.master'] = mv;
+        _flags['log.enabled'] = true;
         await _rebuildSelectedOperations();
         return;
       }
