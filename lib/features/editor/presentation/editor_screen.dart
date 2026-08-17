@@ -44,12 +44,16 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    subscriptions.add(widget.engine.snapshots.listen((value) {
-      if (mounted) setState(() => snapshot = value);
-    }));
-    subscriptions.add(widget.engine.progress.listen((value) {
-      if (mounted) setState(() => progress = value);
-    }));
+    subscriptions.add(
+      widget.engine.snapshots.listen((value) {
+        if (mounted) setState(() => snapshot = value);
+      }),
+    );
+    subscriptions.add(
+      widget.engine.progress.listen((value) {
+        if (mounted) setState(() => progress = value);
+      }),
+    );
     subscriptions.add(widget.engine.events.listen(_handleEngineEvent));
     unawaited(initialize());
   }
@@ -66,7 +70,9 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'exportCompleted':
         final path = value.payload['path']?.toString();
         setState(() {
-          exportMessage = path == null ? 'Export complete' : 'Export complete · $path';
+          exportMessage = path == null
+              ? 'Export complete'
+              : 'Export complete · $path';
           progress = const EngineProgress(operation: 'export', fraction: 1);
           error = null;
         });
@@ -75,7 +81,9 @@ class _EditorScreenState extends State<EditorScreen> {
           ..showSnackBar(
             SnackBar(
               duration: const Duration(seconds: 7),
-              content: Text(path == null ? 'Export complete' : 'Export complete\n$path'),
+              content: Text(
+                path == null ? 'Export complete' : 'Export complete\n$path',
+              ),
               action: SnackBarAction(label: 'OK', onPressed: () {}),
             ),
           );
@@ -86,16 +94,22 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'unsupportedAction':
       case 'engineError':
       case 'previewError':
-        final isExportFailure = value.type == 'engineError' &&
+        final isExportFailure =
+            value.type == 'engineError' &&
             value.payload['action']?.toString() == 'export.production.start';
-        final message = value.payload['error']?.toString() ??
+        final message =
+            value.payload['error']?.toString() ??
             'Engine API not exposed for ${value.payload['action']}';
         setState(() {
           error = message;
           if (isExportFailure) exportMessage = 'Export failed';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(isExportFailure ? 'Export failed\n$message' : message)),
+          SnackBar(
+            content: Text(
+              isExportFailure ? 'Export failed\n$message' : message,
+            ),
+          ),
         );
         return;
     }
@@ -130,9 +144,7 @@ class _EditorScreenState extends State<EditorScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => error = '$e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 
@@ -165,9 +177,13 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   Widget build(BuildContext context) {
     final inspectorFeature = selectedFeature;
-    final wideColorWheels = inspectorFeature?.id == 'color.primaryWheels' ||
+    final wideColorWheels =
+        inspectorFeature?.id == 'color.primaryWheels' ||
         inspectorFeature?.id == 'color.logWheels';
-    final inspectorWidth = wideColorWheels ? 620.0 : 350.0;
+    final nodeWorkspace = workspace == EngineWorkspace.nodes;
+    final inspectorWidth = nodeWorkspace
+        ? 430.0
+        : (wideColorWheels ? 620.0 : 350.0);
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -183,13 +199,19 @@ class _EditorScreenState extends State<EditorScreen> {
               Material(
                 color: Theme.of(context).colorScheme.errorContainer,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 5,
+                  ),
                   child: Row(
                     children: <Widget>[
                       const Icon(Icons.warning_amber_rounded, size: 18),
                       const SizedBox(width: 8),
                       Expanded(child: SelectableText(error!, maxLines: 2)),
-                      TextButton(onPressed: initialize, child: const Text('Retry')),
+                      TextButton(
+                        onPressed: initialize,
+                        child: const Text('Retry'),
+                      ),
                     ],
                   ),
                 ),
@@ -197,7 +219,10 @@ class _EditorScreenState extends State<EditorScreen> {
             Expanded(
               child: Row(
                 children: <Widget>[
-                  _WorkspaceRail(selected: workspace, onSelected: _selectWorkspace),
+                  _WorkspaceRail(
+                    selected: workspace,
+                    onSelected: _selectWorkspace,
+                  ),
                   const VerticalDivider(width: 1),
                   SizedBox(
                     width: 245,
@@ -226,35 +251,48 @@ class _EditorScreenState extends State<EditorScreen> {
                         const Divider(height: 1),
                         _Transport(snapshot: snapshot, dispatch: dispatch),
                         const Divider(height: 1),
-                        SizedBox(height: 150, child: _Timeline(snapshot: snapshot)),
+                        SizedBox(
+                          height: 150,
+                          child: _Timeline(snapshot: snapshot),
+                        ),
                       ],
                     ),
                   ),
                   const VerticalDivider(width: 1),
                   SizedBox(
                     width: inspectorWidth,
-                    child: ListView(
-                      padding: const EdgeInsets.all(10),
-                      children: <Widget>[
-                        Text('Inspector', style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        if (inspectorFeature == null)
-                          const Text('Select a feature to edit its controls.')
-                        else
-                          _FeatureControls(
-                            key: ValueKey(inspectorFeature.id),
-                            feature: inspectorFeature,
-                            supported: supported(inspectorFeature.id),
-                            sliders: sliders,
-                            toggles: toggles,
-                            choices: choices,
-                            dispatch: dispatch,
-                            onSlider: (key, value) => setState(() => sliders[key] = value),
-                            onToggle: (key, value) => setState(() => toggles[key] = value),
-                            onChoice: (key, value) => setState(() => choices[key] = value),
+                    child: nodeWorkspace
+                        ? _NodeGraphPanel(dispatch: dispatch)
+                        : ListView(
+                            padding: const EdgeInsets.all(10),
+                            children: <Widget>[
+                              Text(
+                                'Inspector',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              if (inspectorFeature == null)
+                                const Text(
+                                  'Select a feature to edit its controls.',
+                                )
+                              else
+                                _FeatureControls(
+                                  key: ValueKey(inspectorFeature.id),
+                                  feature: inspectorFeature,
+                                  supported: supported(inspectorFeature.id),
+                                  sliders: sliders,
+                                  toggles: toggles,
+                                  choices: choices,
+                                  dispatch: dispatch,
+                                  onSlider: (key, value) =>
+                                      setState(() => sliders[key] = value),
+                                  onToggle: (key, value) =>
+                                      setState(() => toggles[key] = value),
+                                  onChoice: (key, value) =>
+                                      setState(() => choices[key] = value),
+                                ),
+                            ],
                           ),
-                      ],
-                    ),
                   ),
                 ],
               ),
@@ -283,62 +321,66 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: 54,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: <Widget>[
-              const Icon(Icons.movie_outlined),
-              const SizedBox(width: 8),
-              Text('Digitor', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(width: 18),
-              TextButton.icon(
-                onPressed: onImport,
-                icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                label: const Text('Import'),
-              ),
-              const Spacer(),
-              if (progress != null && progress!.operation == 'export') ...<Widget>[
-                SizedBox(
-                  width: 165,
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(child: LinearProgressIndicator(value: progress!.fraction)),
-                      const SizedBox(width: 8),
-                      Text('${(progress!.fraction * 100).round()}%'),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-              if (exportMessage != null)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 240),
-                  child: Text(
-                    exportMessage!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-              const SizedBox(width: 10),
-              Chip(
-                avatar: Icon(
-                  snapshot.connected ? Icons.check_circle : Icons.link_off,
-                  size: 16,
-                ),
-                label: Text(snapshot.connected ? 'Engine connected' : 'Disconnected'),
-              ),
-              const SizedBox(width: 10),
-              FilledButton.icon(
-                onPressed: onExport,
-                icon: const Icon(Icons.file_upload_outlined, size: 18),
-                label: const Text('Export'),
-              ),
-            ],
+    height: 54,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: <Widget>[
+          const Icon(Icons.movie_outlined),
+          const SizedBox(width: 8),
+          Text('Digitor', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(width: 18),
+          TextButton.icon(
+            onPressed: onImport,
+            icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+            label: const Text('Import'),
           ),
-        ),
-      );
+          const Spacer(),
+          if (progress != null && progress!.operation == 'export') ...<Widget>[
+            SizedBox(
+              width: 165,
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: LinearProgressIndicator(value: progress!.fraction),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('${(progress!.fraction * 100).round()}%'),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (exportMessage != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 240),
+              child: Text(
+                exportMessage!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          const SizedBox(width: 10),
+          Chip(
+            avatar: Icon(
+              snapshot.connected ? Icons.check_circle : Icons.link_off,
+              size: 16,
+            ),
+            label: Text(
+              snapshot.connected ? 'Engine connected' : 'Disconnected',
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            onPressed: onExport,
+            icon: const Icon(Icons.file_upload_outlined, size: 18),
+            label: const Text('Export'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _WorkspaceRail extends StatelessWidget {
@@ -348,41 +390,41 @@ class _WorkspaceRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        width: 88,
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 5),
-          children: <Widget>[
-            for (final item in EngineWorkspace.values)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                child: InkWell(
+    width: 88,
+    child: ListView(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      children: <Widget>[
+        for (final item in EngineWorkspace.values)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(9),
+              onTap: () => onSelected(item),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+                decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(9),
-                  onTap: () => onSelected(item),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(9),
-                      color: selected == item
-                          ? Theme.of(context).colorScheme.secondaryContainer
-                          : Colors.transparent,
+                  color: selected == item
+                      ? Theme.of(context).colorScheme.secondaryContainer
+                      : Colors.transparent,
+                ),
+                child: Column(
+                  children: <Widget>[
+                    Icon(item.icon, size: 20),
+                    const SizedBox(height: 3),
+                    Text(
+                      item.label,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 10),
                     ),
-                    child: Column(
-                      children: <Widget>[
-                        Icon(item.icon, size: 20),
-                        const SizedBox(height: 3),
-                        Text(
-                          item.label,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
               ),
-          ],
-        ),
-      );
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class _FeatureList extends StatelessWidget {
@@ -399,34 +441,34 @@ class _FeatureList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView(
-        padding: const EdgeInsets.all(8),
-        children: <Widget>[
-          for (final feature in features)
-            Card(
-              margin: const EdgeInsets.symmetric(vertical: 3),
-              color: selectedId == feature.id
-                  ? Theme.of(context).colorScheme.secondaryContainer
-                  : null,
-              child: ListTile(
-                dense: true,
-                selected: selectedId == feature.id,
-                onTap: () => onSelected(feature),
-                title: Text(feature.title),
-                subtitle: Text(
-                  feature.summary,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Icon(
-                  supported(feature.id)
-                      ? Icons.check_circle_outline
-                      : Icons.circle_outlined,
-                  size: 16,
-                ),
-              ),
+    padding: const EdgeInsets.all(8),
+    children: <Widget>[
+      for (final feature in features)
+        Card(
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          color: selectedId == feature.id
+              ? Theme.of(context).colorScheme.secondaryContainer
+              : null,
+          child: ListTile(
+            dense: true,
+            selected: selectedId == feature.id,
+            onTap: () => onSelected(feature),
+            title: Text(feature.title),
+            subtitle: Text(
+              feature.summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-        ],
-      );
+            trailing: Icon(
+              supported(feature.id)
+                  ? Icons.check_circle_outline
+                  : Icons.circle_outlined,
+              size: 16,
+            ),
+          ),
+        ),
+    ],
+  );
 }
 
 class _Canvas extends StatelessWidget {
@@ -452,42 +494,6 @@ class _Canvas extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (workspace == EngineWorkspace.nodes) {
-      return Container(
-        color: const Color(0xFF0D0D0D),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: <Widget>[
-            const Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: <Widget>[
-                  _Node('Input', Icons.input),
-                  Icon(Icons.arrow_forward, color: Colors.white24),
-                  _Node('Grade', Icons.tune),
-                  Icon(Icons.arrow_forward, color: Colors.white24),
-                  _Node('Output', Icons.output),
-                ],
-              ),
-            ),
-            Wrap(
-              spacing: 8,
-              children: <Widget>[
-                FilledButton.tonal(
-                  onPressed: () => dispatch('nodes.graph', 'addSerial'),
-                  child: const Text('+ Serial'),
-                ),
-                FilledButton.tonal(
-                  onPressed: () => dispatch('nodes.graph', 'addParallel'),
-                  child: const Text('+ Parallel'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
-
     if (workspace == EngineWorkspace.scopes) {
       return GridView.count(
         padding: const EdgeInsets.all(12),
@@ -505,7 +511,9 @@ class _Canvas extends StatelessWidget {
     }
 
     if (workspace == EngineWorkspace.export) {
-      final exportProgress = progress?.operation == 'export' ? progress!.fraction : null;
+      final exportProgress = progress?.operation == 'export'
+          ? progress!.fraction
+          : null;
       return Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620),
@@ -517,7 +525,10 @@ class _Canvas extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Text('Delivery', style: Theme.of(context).textTheme.headlineSmall),
+                  Text(
+                    'Delivery',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
                   const SizedBox(height: 7),
                   const Text(
                     'Production export uses the same DigitorEngine node recipe and native render path as preview.',
@@ -556,9 +567,16 @@ class _Canvas extends StatelessWidget {
       return ListView(
         padding: const EdgeInsets.all(18),
         children: <Widget>[
-          Text('DigitorEngine', style: Theme.of(context).textTheme.headlineSmall),
+          Text(
+            'DigitorEngine',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
           const SizedBox(height: 8),
-          Text(snapshot.connected ? 'Native engine connected' : 'Engine unavailable'),
+          Text(
+            snapshot.connected
+                ? 'Native engine connected'
+                : 'Engine unavailable',
+          ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -590,7 +608,11 @@ class _Canvas extends StatelessWidget {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
-                              Icon(Icons.video_file_outlined, size: 54, color: Colors.white24),
+                              Icon(
+                                Icons.video_file_outlined,
+                                size: 54,
+                                color: Colors.white24,
+                              ),
                               SizedBox(height: 8),
                               Text(
                                 'Import media to start Engine preview',
@@ -599,12 +621,19 @@ class _Canvas extends StatelessWidget {
                             ],
                           ),
                         )
-                      : Texture(textureId: id, filterQuality: FilterQuality.medium),
+                      : Texture(
+                          textureId: id,
+                          filterQuality: FilterQuality.medium,
+                        ),
                 ),
               ),
             ),
           ),
-          Positioned(left: 14, top: 12, child: Text('${workspace.label} · DigitorEngine')),
+          Positioned(
+            left: 14,
+            top: 12,
+            child: Text('${workspace.label} · DigitorEngine'),
+          ),
           Positioned(
             right: 14,
             top: 12,
@@ -634,34 +663,36 @@ class _Transport extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: 46,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Text(_time(snapshot.position)),
-            const SizedBox(width: 14),
-            IconButton(
-              onPressed: () => dispatch('playback.transport', 'previousFrame'),
-              icon: const Icon(Icons.skip_previous),
-            ),
-            IconButton(
-              onPressed: () => dispatch('playback.transport', 'playPause'),
-              icon: Icon(snapshot.isPlaying ? Icons.pause_circle : Icons.play_circle),
-              iconSize: 30,
-            ),
-            IconButton(
-              onPressed: () => dispatch('playback.transport', 'stop'),
-              icon: const Icon(Icons.stop_circle_outlined),
-            ),
-            IconButton(
-              onPressed: () => dispatch('playback.transport', 'nextFrame'),
-              icon: const Icon(Icons.skip_next),
-            ),
-            const SizedBox(width: 14),
-            Text(_time(snapshot.duration)),
-          ],
+    height: 46,
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        Text(_time(snapshot.position)),
+        const SizedBox(width: 14),
+        IconButton(
+          onPressed: () => dispatch('playback.transport', 'previousFrame'),
+          icon: const Icon(Icons.skip_previous),
         ),
-      );
+        IconButton(
+          onPressed: () => dispatch('playback.transport', 'playPause'),
+          icon: Icon(
+            snapshot.isPlaying ? Icons.pause_circle : Icons.play_circle,
+          ),
+          iconSize: 30,
+        ),
+        IconButton(
+          onPressed: () => dispatch('playback.transport', 'stop'),
+          icon: const Icon(Icons.stop_circle_outlined),
+        ),
+        IconButton(
+          onPressed: () => dispatch('playback.transport', 'nextFrame'),
+          icon: const Icon(Icons.skip_next),
+        ),
+        const SizedBox(width: 14),
+        Text(_time(snapshot.duration)),
+      ],
+    ),
+  );
 }
 
 class _Timeline extends StatelessWidget {
@@ -670,26 +701,109 @@ class _Timeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
+    children: <Widget>[
+      const SizedBox(
+        height: 28,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: EdgeInsets.only(left: 12),
+            child: Text('MULTITRACK TIMELINE · engine-owned state'),
+          ),
+        ),
+      ),
+      if (snapshot.state['mediaPath'] != null)
+        Expanded(
+          child: _Track(
+            'V1',
+            Icons.videocam_outlined,
+            snapshot.state['mediaPath']!.toString(),
+          ),
+        )
+      else
+        const Expanded(
+          child: _Track('V1', Icons.videocam_outlined, 'No media'),
+        ),
+      const Expanded(
+        child: _Track('A1', Icons.audiotrack_outlined, 'Engine audio'),
+      ),
+    ],
+  );
+}
+
+class _NodeGraphPanel extends StatelessWidget {
+  const _NodeGraphPanel({required this.dispatch});
+
+  final Future<void> Function(String, String, [Object?]) dispatch;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: const Color(0xFF0D0D0D),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const SizedBox(
-            height: 28,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: EdgeInsets.only(left: 12),
-                child: Text('MULTITRACK TIMELINE · engine-owned state'),
+          Row(
+            children: <Widget>[
+              const Icon(Icons.account_tree_outlined, size: 18),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  'Node Graph',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF090909),
+                border: Border.all(color: Colors.white10),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: const SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: <Widget>[
+                    _Node('Input', Icons.input),
+                    SizedBox(width: 8),
+                    Icon(Icons.arrow_forward, color: Colors.white24, size: 18),
+                    SizedBox(width: 8),
+                    _Node('Grade', Icons.tune),
+                    SizedBox(width: 8),
+                    Icon(Icons.arrow_forward, color: Colors.white24, size: 18),
+                    SizedBox(width: 8),
+                    _Node('Output', Icons.output),
+                  ],
+                ),
               ),
             ),
           ),
-          if (snapshot.state['mediaPath'] != null)
-            Expanded(
-              child: _Track('V1', Icons.videocam_outlined, snapshot.state['mediaPath']!.toString()),
-            )
-          else
-            const Expanded(child: _Track('V1', Icons.videocam_outlined, 'No media')),
-          const Expanded(child: _Track('A1', Icons.audiotrack_outlined, 'Engine audio')),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              FilledButton.tonalIcon(
+                onPressed: () => dispatch('nodes.graph', 'addSerial'),
+                icon: const Icon(Icons.add, size: 17),
+                label: const Text('Serial'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: () => dispatch('nodes.graph', 'addParallel'),
+                icon: const Icon(Icons.call_split, size: 17),
+                label: const Text('Parallel'),
+              ),
+            ],
+          ),
         ],
-      );
+      ),
+    ),
+  );
 }
 
 class _Node extends StatelessWidget {
@@ -699,19 +813,19 @@ class _Node extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: SizedBox(
-          width: 110,
-          height: 72,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Icon(icon, size: 19),
-              const SizedBox(height: 5),
-              Text(title),
-            ],
-          ),
-        ),
-      );
+    child: SizedBox(
+      width: 110,
+      height: 72,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Icon(icon, size: 19),
+          const SizedBox(height: 5),
+          Text(title),
+        ],
+      ),
+    ),
+  );
 }
 
 class _Scope extends StatelessWidget {
@@ -720,15 +834,19 @@ class _Scope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Stack(
-          children: <Widget>[
-            Positioned(left: 12, top: 10, child: Text(title)),
-            const Center(
-              child: Icon(Icons.monitor_heart_outlined, size: 54, color: Colors.white24),
-            ),
-          ],
+    child: Stack(
+      children: <Widget>[
+        Positioned(left: 12, top: 10, child: Text(title)),
+        const Center(
+          child: Icon(
+            Icons.monitor_heart_outlined,
+            size: 54,
+            color: Colors.white24,
+          ),
         ),
-      );
+      ],
+    ),
+  );
 }
 
 class _Track extends StatelessWidget {
@@ -739,38 +857,38 @@ class _Track extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-        children: <Widget>[
-          SizedBox(
-            width: 72,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                Icon(icon, size: 15),
-                const SizedBox(width: 5),
-                Text(label),
-              ],
-            ),
+    children: <Widget>[
+      SizedBox(
+        width: 72,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, size: 15),
+            const SizedBox(width: 5),
+            Text(label),
+          ],
+        ),
+      ),
+      const VerticalDivider(width: 1),
+      Expanded(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white12),
+            borderRadius: BorderRadius.circular(4),
           ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-              padding: const EdgeInsets.symmetric(horizontal: 9),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white12),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              alignment: Alignment.centerLeft,
-              child: Text(
-                content,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Colors.white54),
-              ),
-            ),
+          alignment: Alignment.centerLeft,
+          child: Text(
+            content,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11, color: Colors.white54),
           ),
-        ],
-      );
+        ),
+      ),
+    ],
+  );
 }
 
 class _FeatureControls extends StatelessWidget {
@@ -836,7 +954,9 @@ class _FeatureControls extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 3),
           child: OutlinedButton(
-            onPressed: supported ? () => dispatch(feature.id, control.id) : null,
+            onPressed: supported
+                ? () => dispatch(feature.id, control.id)
+                : null,
             child: Text(control.label),
           ),
         );
@@ -869,7 +989,8 @@ class _FeatureControls extends StatelessWidget {
                 },
         );
       case EngineControlType.choice:
-        final selected = choices[key] ??
+        final selected =
+            choices[key] ??
             (control.choices.isEmpty ? null : control.choices.first);
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
@@ -911,16 +1032,19 @@ class _FeatureHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(feature.title, style: Theme.of(context).textTheme.titleSmall),
-          ),
-          Icon(
-            supported ? Icons.check_circle_outline : Icons.info_outline,
-            size: 15,
-          ),
-        ],
-      );
+    children: <Widget>[
+      Expanded(
+        child: Text(
+          feature.title,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+      Icon(
+        supported ? Icons.check_circle_outline : Icons.info_outline,
+        size: 15,
+      ),
+    ],
+  );
 }
 
 class _LabeledSlider extends StatelessWidget {
@@ -941,22 +1065,22 @@ class _LabeledSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: <Widget>[
+      Row(
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(child: Text(label)),
-              Text(value.toStringAsFixed(2)),
-            ],
-          ),
-          Slider(
-            min: min,
-            max: max,
-            value: value.clamp(min, max).toDouble(),
-            onChanged: enabled ? onChanged : null,
-          ),
+          Expanded(child: Text(label)),
+          Text(value.toStringAsFixed(2)),
         ],
-      );
+      ),
+      Slider(
+        min: min,
+        max: max,
+        value: value.clamp(min, max).toDouble(),
+        onChanged: enabled ? onChanged : null,
+      ),
+    ],
+  );
 }
 
 class _LogWheelsControls extends StatefulWidget {
@@ -998,86 +1122,91 @@ class _LogWheelsControlsState extends State<_LogWheelsControls> {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text('Log Wheels', style: Theme.of(context).textTheme.titleSmall),
-                  ),
-                  Icon(
-                    widget.supported ? Icons.check_circle_outline : Icons.info_outline,
-                    size: 15,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SegmentedButton<String>(
-                segments: const <ButtonSegment<String>>[
-                  ButtonSegment(value: 'shadows', label: Text('Shadows')),
-                  ButtonSegment(value: 'midtones', label: Text('Midtones')),
-                  ButtonSegment(value: 'highlights', label: Text('Highlights')),
-                  ButtonSegment(value: 'global', label: Text('Global')),
-                ],
-                selected: <String>{range},
-                showSelectedIcon: false,
-                onSelectionChanged: widget.supported
-                    ? (next) => setState(() => range = next.first)
-                    : null,
-              ),
-              const SizedBox(height: 10),
-              for (final component in const <(String, String)>[
-                ('r', 'Red'),
-                ('g', 'Green'),
-                ('b', 'Blue'),
-                ('master', 'Master'),
-              ])
-                _LabeledSlider(
-                  label: component.$2,
-                  value: value('$range.${component.$1}'),
-                  min: -2,
-                  max: 2,
-                  enabled: widget.supported,
-                  onChanged: (next) => setValue('$range.${component.$1}', next),
+              Expanded(
+                child: Text(
+                  'Log Wheels',
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
-              const Divider(),
-              _LabeledSlider(
-                label: 'Shadow Pivot',
-                value: value('shadowPivot', 0.33),
-                min: 0.05,
-                max: 0.60,
-                enabled: widget.supported,
-                onChanged: (next) => setValue('shadowPivot', next),
               ),
-              _LabeledSlider(
-                label: 'Highlight Pivot',
-                value: value('highlightPivot', 0.67),
-                min: 0.40,
-                max: 0.95,
-                enabled: widget.supported,
-                onChanged: (next) => setValue('highlightPivot', next),
-              ),
-              _LabeledSlider(
-                label: 'Transition',
-                value: value('transitionWidth', 0.10),
-                min: 0.01,
-                max: 0.30,
-                enabled: widget.supported,
-                onChanged: (next) => setValue('transitionWidth', next),
-              ),
-              const SizedBox(height: 5),
-              OutlinedButton.icon(
-                onPressed: widget.supported ? reset : null,
-                icon: const Icon(Icons.restart_alt),
-                label: const Text('Reset Log Wheels'),
+              Icon(
+                widget.supported
+                    ? Icons.check_circle_outline
+                    : Icons.info_outline,
+                size: 15,
               ),
             ],
           ),
-        ),
-      );
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const <ButtonSegment<String>>[
+              ButtonSegment(value: 'shadows', label: Text('Shadows')),
+              ButtonSegment(value: 'midtones', label: Text('Midtones')),
+              ButtonSegment(value: 'highlights', label: Text('Highlights')),
+              ButtonSegment(value: 'global', label: Text('Global')),
+            ],
+            selected: <String>{range},
+            showSelectedIcon: false,
+            onSelectionChanged: widget.supported
+                ? (next) => setState(() => range = next.first)
+                : null,
+          ),
+          const SizedBox(height: 10),
+          for (final component in const <(String, String)>[
+            ('r', 'Red'),
+            ('g', 'Green'),
+            ('b', 'Blue'),
+            ('master', 'Master'),
+          ])
+            _LabeledSlider(
+              label: component.$2,
+              value: value('$range.${component.$1}'),
+              min: -2,
+              max: 2,
+              enabled: widget.supported,
+              onChanged: (next) => setValue('$range.${component.$1}', next),
+            ),
+          const Divider(),
+          _LabeledSlider(
+            label: 'Shadow Pivot',
+            value: value('shadowPivot', 0.33),
+            min: 0.05,
+            max: 0.60,
+            enabled: widget.supported,
+            onChanged: (next) => setValue('shadowPivot', next),
+          ),
+          _LabeledSlider(
+            label: 'Highlight Pivot',
+            value: value('highlightPivot', 0.67),
+            min: 0.40,
+            max: 0.95,
+            enabled: widget.supported,
+            onChanged: (next) => setValue('highlightPivot', next),
+          ),
+          _LabeledSlider(
+            label: 'Transition',
+            value: value('transitionWidth', 0.10),
+            min: 0.01,
+            max: 0.30,
+            enabled: widget.supported,
+            onChanged: (next) => setValue('transitionWidth', next),
+          ),
+          const SizedBox(height: 5),
+          OutlinedButton.icon(
+            onPressed: widget.supported ? reset : null,
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Reset Log Wheels'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _RgbCurvesControls extends StatefulWidget {
@@ -1105,7 +1234,8 @@ class _RgbCurvesControlsState extends State<_RgbCurvesControls> {
     final payload = <String, Object?>{
       'channel': channel,
       'points': <Map<String, double>>[
-        for (final point in points) <String, double>{'x': point.dx, 'y': point.dy},
+        for (final point in points)
+          <String, double>{'x': point.dx, 'y': point.dy},
       ],
     };
     unawaited(widget.dispatch('color.rgbCurves', 'points', payload));
@@ -1147,7 +1277,9 @@ class _RgbCurvesControlsState extends State<_RgbCurvesControls> {
     if (!widget.supported || index < 0 || index >= points.length) return;
     final endpoint = index == 0 || index == points.length - 1;
     final minX = index == 0 ? 0.0 : points[index - 1].dx + 0.001;
-    final maxX = index == points.length - 1 ? 1.0 : points[index + 1].dx - 0.001;
+    final maxX = index == points.length - 1
+        ? 1.0
+        : points[index + 1].dx - 0.001;
     final next = Offset(
       endpoint
           ? (index == 0 ? 0.0 : 1.0)
@@ -1173,85 +1305,91 @@ class _RgbCurvesControlsState extends State<_RgbCurvesControls> {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text('RGB Curves', style: Theme.of(context).textTheme.titleSmall),
-                  ),
-                  Icon(
-                    widget.supported ? Icons.check_circle_outline : Icons.info_outline,
-                    size: 15,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SegmentedButton<String>(
-                segments: const <ButtonSegment<String>>[
-                  ButtonSegment(value: 'master', label: Text('Master')),
-                  ButtonSegment(value: 'red', label: Text('R')),
-                  ButtonSegment(value: 'green', label: Text('G')),
-                  ButtonSegment(value: 'blue', label: Text('B')),
-                ],
-                selected: <String>{channel},
-                showSelectedIcon: false,
-                onSelectionChanged: widget.supported
-                    ? (next) => setState(() {
-                          channel = next.first;
-                          selectedPoint = null;
-                        })
-                    : null,
-              ),
-              const SizedBox(height: 10),
-              AspectRatio(
-                aspectRatio: 1.15,
-                child: _CurveSurface(
-                  enabled: widget.supported,
-                  points: points,
-                  selectedPoint: selectedPoint,
-                  onSelect: (index) => setState(() => selectedPoint = index),
-                  onAdd: _addPoint,
-                  onMove: _movePoint,
+              Expanded(
+                child: Text(
+                  'RGB Curves',
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
-              const SizedBox(height: 7),
-              Text(
-                'Long-press to add a point. Drag points to shape the curve.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 7,
-                runSpacing: 7,
-                children: <Widget>[
-                  OutlinedButton.icon(
-                    onPressed: widget.supported &&
-                            selectedPoint != null &&
-                            selectedPoint! > 0 &&
-                            selectedPoint! < points.length - 1
-                        ? _deleteSelected
-                        : null,
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Delete point'),
-                  ),
-                  OutlinedButton(
-                    onPressed: widget.supported ? _resetChannel : null,
-                    child: const Text('Reset channel'),
-                  ),
-                  OutlinedButton(
-                    onPressed: widget.supported ? _resetAll : null,
-                    child: const Text('Reset all'),
-                  ),
-                ],
+              Icon(
+                widget.supported
+                    ? Icons.check_circle_outline
+                    : Icons.info_outline,
+                size: 15,
               ),
             ],
           ),
-        ),
-      );
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const <ButtonSegment<String>>[
+              ButtonSegment(value: 'master', label: Text('Master')),
+              ButtonSegment(value: 'red', label: Text('R')),
+              ButtonSegment(value: 'green', label: Text('G')),
+              ButtonSegment(value: 'blue', label: Text('B')),
+            ],
+            selected: <String>{channel},
+            showSelectedIcon: false,
+            onSelectionChanged: widget.supported
+                ? (next) => setState(() {
+                    channel = next.first;
+                    selectedPoint = null;
+                  })
+                : null,
+          ),
+          const SizedBox(height: 10),
+          AspectRatio(
+            aspectRatio: 1.15,
+            child: _CurveSurface(
+              enabled: widget.supported,
+              points: points,
+              selectedPoint: selectedPoint,
+              onSelect: (index) => setState(() => selectedPoint = index),
+              onAdd: _addPoint,
+              onMove: _movePoint,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            'Long-press to add a point. Drag points to shape the curve.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: <Widget>[
+              OutlinedButton.icon(
+                onPressed:
+                    widget.supported &&
+                        selectedPoint != null &&
+                        selectedPoint! > 0 &&
+                        selectedPoint! < points.length - 1
+                    ? _deleteSelected
+                    : null,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Delete point'),
+              ),
+              OutlinedButton(
+                onPressed: widget.supported ? _resetChannel : null,
+                child: const Text('Reset channel'),
+              ),
+              OutlinedButton(
+                onPressed: widget.supported ? _resetAll : null,
+                child: const Text('Reset all'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _CurveSurface extends StatefulWidget {
@@ -1278,16 +1416,19 @@ class _CurveSurfaceState extends State<_CurveSurface> {
   int? dragging;
 
   Offset _normalized(Offset local, Size size) => Offset(
-        (local.dx / size.width).clamp(0.0, 1.0).toDouble(),
-        (1 - local.dy / size.height).clamp(0.0, 1.0).toDouble(),
-      );
+    (local.dx / size.width).clamp(0.0, 1.0).toDouble(),
+    (1 - local.dy / size.height).clamp(0.0, 1.0).toDouble(),
+  );
 
   int? _hit(Offset local, Size size) {
     var best = 18.0;
     int? index;
     for (var i = 0; i < widget.points.length; i++) {
       final point = widget.points[i];
-      final screen = Offset(point.dx * size.width, (1 - point.dy) * size.height);
+      final screen = Offset(
+        point.dx * size.width,
+        (1 - point.dy) * size.height,
+      );
       final distance = (screen - local).distance;
       if (distance <= best) {
         best = distance;
@@ -1299,43 +1440,47 @@ class _CurveSurfaceState extends State<_CurveSurface> {
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) {
-          final size = Size(constraints.maxWidth, constraints.maxHeight);
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: !widget.enabled
-                ? null
-                : (details) {
-                    final hit = _hit(details.localPosition, size);
-                    if (hit != null) widget.onSelect(hit);
-                  },
-            onLongPressStart: !widget.enabled
-                ? null
-                : (details) => widget.onAdd(_normalized(details.localPosition, size)),
-            onPanStart: !widget.enabled
-                ? null
-                : (details) {
-                    dragging = _hit(details.localPosition, size);
-                    if (dragging != null) widget.onSelect(dragging!);
-                  },
-            onPanUpdate: !widget.enabled
-                ? null
-                : (details) {
-                    final index = dragging;
-                    if (index != null) {
-                      widget.onMove(index, _normalized(details.localPosition, size));
-                    }
-                  },
-            onPanEnd: (_) => dragging = null,
-            child: CustomPaint(
-              painter: _CurvePainter(
-                points: widget.points,
-                selectedPoint: widget.selectedPoint,
-              ),
-            ),
-          );
-        },
+    builder: (context, constraints) {
+      final size = Size(constraints.maxWidth, constraints.maxHeight);
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: !widget.enabled
+            ? null
+            : (details) {
+                final hit = _hit(details.localPosition, size);
+                if (hit != null) widget.onSelect(hit);
+              },
+        onLongPressStart: !widget.enabled
+            ? null
+            : (details) =>
+                  widget.onAdd(_normalized(details.localPosition, size)),
+        onPanStart: !widget.enabled
+            ? null
+            : (details) {
+                dragging = _hit(details.localPosition, size);
+                if (dragging != null) widget.onSelect(dragging!);
+              },
+        onPanUpdate: !widget.enabled
+            ? null
+            : (details) {
+                final index = dragging;
+                if (index != null) {
+                  widget.onMove(
+                    index,
+                    _normalized(details.localPosition, size),
+                  );
+                }
+              },
+        onPanEnd: (_) => dragging = null,
+        child: CustomPaint(
+          painter: _CurvePainter(
+            points: widget.points,
+            selectedPoint: widget.selectedPoint,
+          ),
+        ),
       );
+    },
+  );
 }
 
 class _CurvePainter extends CustomPainter {
