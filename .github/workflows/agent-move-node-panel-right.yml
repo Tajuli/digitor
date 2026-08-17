@@ -12,122 +12,20 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Move node workspace UI into right inspector
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('lib/features/editor/presentation/editor_screen.dart')
-          text = path.read_text()
-
-          old_width = """    final wideColorWheels = inspectorFeature?.id == 'color.primaryWheels' ||\n        inspectorFeature?.id == 'color.logWheels';\n    final inspectorWidth = wideColorWheels ? 620.0 : 350.0;\n"""
-          new_width = """    final wideColorWheels = inspectorFeature?.id == 'color.primaryWheels' ||\n        inspectorFeature?.id == 'color.logWheels';\n    final nodeWorkspace = workspace == EngineWorkspace.nodes;\n    final inspectorWidth = nodeWorkspace ? 430.0 : (wideColorWheels ? 620.0 : 350.0);\n"""
-          assert old_width in text
-          text = text.replace(old_width, new_width, 1)
-
-          old_inspector = """                    child: ListView(\n                      padding: const EdgeInsets.all(10),\n                      children: <Widget>[\n                        Text('Inspector', style: Theme.of(context).textTheme.titleMedium),\n                        const SizedBox(height: 8),\n                        if (inspectorFeature == null)\n                          const Text('Select a feature to edit its controls.')\n                        else\n                          _FeatureControls(\n                            key: ValueKey(inspectorFeature.id),\n                            feature: inspectorFeature,\n                            supported: supported(inspectorFeature.id),\n                            sliders: sliders,\n                            toggles: toggles,\n                            choices: choices,\n                            dispatch: dispatch,\n                            onSlider: (key, value) => setState(() => sliders[key] = value),\n                            onToggle: (key, value) => setState(() => toggles[key] = value),\n                            onChoice: (key, value) => setState(() => choices[key] = value),\n                          ),\n                      ],\n                    ),\n"""
-          new_inspector = """                    child: nodeWorkspace\n                        ? _NodeGraphPanel(dispatch: dispatch)\n                        : ListView(\n                            padding: const EdgeInsets.all(10),\n                            children: <Widget>[\n                              Text('Inspector', style: Theme.of(context).textTheme.titleMedium),\n                              const SizedBox(height: 8),\n                              if (inspectorFeature == null)\n                                const Text('Select a feature to edit its controls.')\n                              else\n                                _FeatureControls(\n                                  key: ValueKey(inspectorFeature.id),\n                                  feature: inspectorFeature,\n                                  supported: supported(inspectorFeature.id),\n                                  sliders: sliders,\n                                  toggles: toggles,\n                                  choices: choices,\n                                  dispatch: dispatch,\n                                  onSlider: (key, value) => setState(() => sliders[key] = value),\n                                  onToggle: (key, value) => setState(() => toggles[key] = value),\n                                  onChoice: (key, value) => setState(() => choices[key] = value),\n                                ),\n                            ],\n                          ),\n"""
-          assert old_inspector in text
-          text = text.replace(old_inspector, new_inspector, 1)
-
-          old_nodes = """    if (workspace == EngineWorkspace.nodes) {\n      return Container(\n        color: const Color(0xFF0D0D0D),\n        padding: const EdgeInsets.all(16),\n        child: Column(\n          children: <Widget>[\n            const Expanded(\n              child: Row(\n                mainAxisAlignment: MainAxisAlignment.spaceEvenly,\n                children: <Widget>[\n                  _Node('Input', Icons.input),\n                  Icon(Icons.arrow_forward, color: Colors.white24),\n                  _Node('Grade', Icons.tune),\n                  Icon(Icons.arrow_forward, color: Colors.white24),\n                  _Node('Output', Icons.output),\n                ],\n              ),\n            ),\n            Wrap(\n              spacing: 8,\n              children: <Widget>[\n                FilledButton.tonal(\n                  onPressed: () => dispatch('nodes.graph', 'addSerial'),\n                  child: const Text('+ Serial'),\n                ),\n                FilledButton.tonal(\n                  onPressed: () => dispatch('nodes.graph', 'addParallel'),\n                  child: const Text('+ Parallel'),\n                ),\n              ],\n            ),\n          ],\n        ),\n      );\n    }\n\n"""
-          assert old_nodes in text
-          text = text.replace(old_nodes, '', 1)
-
-          anchor = """class _Node extends StatelessWidget {\n"""
-          panel = r'''class _NodeGraphPanel extends StatelessWidget {
-  const _NodeGraphPanel({required this.dispatch});
-
-  final Future<void> Function(String, String, [Object?]) dispatch;
-
-  @override
-  Widget build(BuildContext context) => ColoredBox(
-        color: const Color(0xFF0D0D0D),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.account_tree_outlined, size: 18),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      'Node Graph',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF090909),
-                    border: Border.all(color: Colors.white10),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.all(12),
-                  child: const SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: <Widget>[
-                        _Node('Input', Icons.input),
-                        SizedBox(width: 8),
-                        Icon(Icons.arrow_forward, color: Colors.white24, size: 18),
-                        SizedBox(width: 8),
-                        _Node('Grade', Icons.tune),
-                        SizedBox(width: 8),
-                        Icon(Icons.arrow_forward, color: Colors.white24, size: 18),
-                        SizedBox(width: 8),
-                        _Node('Output', Icons.output),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  FilledButton.tonalIcon(
-                    onPressed: () => dispatch('nodes.graph', 'addSerial'),
-                    icon: const Icon(Icons.add, size: 17),
-                    label: const Text('Serial'),
-                  ),
-                  FilledButton.tonalIcon(
-                    onPressed: () => dispatch('nodes.graph', 'addParallel'),
-                    icon: const Icon(Icons.call_split, size: 17),
-                    label: const Text('Parallel'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-}
-
-'''
-          assert anchor in text
-          text = text.replace(anchor, panel + anchor, 1)
-          path.write_text(text)
-          PY
-      - name: Validate Dart formatting and analysis
-        run: |
-          dart format lib/features/editor/presentation/editor_screen.dart
-          flutter pub get
-          flutter analyze --no-fatal-infos
-      - name: Commit fix
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: python3 tool/agent_move_node_panel_right.py
+      - run: dart format lib/features/editor/presentation/editor_screen.dart
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - name: Commit patch
         shell: bash
         run: |
           git config user.name github-actions[bot]
