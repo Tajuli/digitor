@@ -1,6 +1,6 @@
 # DigitorEngine integration audit
 
-Audited engine commit: `4db9bed7f14e146bf124f78c8c3971b1620a1b1e`
+Audited engine commit: `9106435d0cc724b9376a3bba0bf435d0c0a914b3`
 
 ## Result
 
@@ -16,6 +16,7 @@ The current Digitor dependency is pinned to the audited DigitorEngine commit thr
 - File/save pickers and presentation of engine errors, progress, telemetry and capabilities.
 - Conversion of user interactions into typed DigitorEngine commands/parameters.
 - Rendering the Flutter texture id produced by DigitorEngine.
+- Platform UI family selection: Android/iOS share mobile UI; Windows/macOS share desktop UI.
 
 ### DigitorEngine (authoritative implementation)
 
@@ -35,12 +36,19 @@ The current Digitor dependency is pinned to the audited DigitorEngine commit thr
 3. Preview and export bind to the same Engine-owned node graph revisions/recipe identity; Digitor must not implement a second processing path.
 4. The Engine's own release audit states portable CI does not prove physical GPU execution, native texture registration, zero-copy interop or hardware encoding. Those remain real-device qualification items.
 5. Historical implementation truth tables distinguish source implementation from hardware qualification. App UI must therefore report runtime capability rather than assume every GPU path is available on every machine.
+6. The current Flutter plugin package declares Android, iOS, macOS and Windows hosts, so platform-family UI routing belongs in the Digitor presentation layer rather than in native rendering code.
 
 ## Integration rule
 
 `lib/core/engine/ffi_engine_gateway.dart` is an adapter, not an editor implementation. It may keep presentation/input values needed to build typed Engine parameter objects, but it must never decode frames, transform pixels, execute effects, schedule rendering, encode media or silently implement fallback behavior.
 
-The app dependency must remain pinned to an audited DigitorEngine commit. Updating the Engine requires an explicit dependency update followed by Windows build/runtime qualification.
+The app dependency must remain pinned to an audited DigitorEngine commit. Updating the Engine requires an explicit dependency update followed by Windows, Android and Apple build/runtime qualification.
+
+## Platform UI qualification
+
+- Android and iOS must instantiate `MobileEditorScreen` regardless of phone/tablet width.
+- Windows and macOS must instantiate `EditorScreen` regardless of desktop window width.
+- Both UI families must send commands through the same `EngineGateway` and render the same Engine-owned preview texture/state.
 
 ## Windows qualification
 
