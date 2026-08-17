@@ -23,6 +23,15 @@ DigitorEngine owns:
 
 There must never be a second Dart implementation of media processing, timeline rendering, grading/effects, playback rendering, or export processing.
 
+## Platform UI family contract
+
+Digitor has two product UI families, selected by target platform rather than window width:
+
+- **Android + iOS:** `MobileEditorScreen`. Both platforms share the same CapCut-inspired mobile editor structure, controls and visual hierarchy. Phone/tablet size may change density and available panel height, but it must not switch to the desktop editor.
+- **Windows + macOS:** `EditorScreen`. Both desktop platforms share the same workstation layout, inspector, timeline and node/color workspace structure. Window resizing must not switch to the mobile editor.
+
+This keeps interaction design consistent inside each platform family while still allowing responsive sizing within that family.
+
 ## Flutter ↔ DigitorEngine boundary
 
 `DigitorFfiEngineGateway` is the application-facing boundary. It adapts UI intents and read-only UI state to the public `digitor_engine_ffi` Flutter package.
