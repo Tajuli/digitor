@@ -503,6 +503,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'gpuResident': media.firstFrame.gpuResident,
       'cpuResident': media.firstFrame.cpuResident,
     });
+    _debug(
+      'media durationUs=${media.duration.inMicroseconds} '
+      'frameDurationUs=${media.firstFrame.duration.inMicroseconds}',
+    );
     await _renderPreview(force: true);
   }
 
@@ -802,6 +806,12 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       final durationUs = status.durationUs > 0
           ? status.durationUs
           : media.duration.inMicroseconds;
+      _debug(
+        'export destination=$outputPath durationUs=$durationUs '
+        'timelineDurationUs=${status.durationUs} '
+        'mediaDurationUs=${media.duration.inMicroseconds} '
+        'frameDurationUs=$frameDurationUs codec=${_exportCodec.name}',
+      );
       if (durationUs <= 0) {
         throw StateError('Native media duration is unavailable for full export.');
       }
@@ -844,7 +854,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       if (!_disposed) {
         _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
       }
-      _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
+      _debug(
+        'export completed $outputPath '
+        'format=${_exportFormat.name} codec=${_exportCodec.name}',
+      );
       _event('exportCompleted', <String, Object?>{
         'path': outputPath,
         'format': _exportFormat.name,
