@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'engine_feature_catalog.dart';
 import 'engine_gateway.dart';
@@ -11,6 +12,9 @@ import 'engine_gateway.dart';
 /// Direct DigitorEngine integration. Flutter owns UI state only; decode,
 /// rendering, grading, node execution, playback and export remain in Engine.
 final class DigitorFfiEngineGateway implements EngineGateway {
+  static const MethodChannel _androidExportChannel =
+      MethodChannel('digitor_engine_ffi/platform_host');
+
   final _snapshotController = StreamController<EngineSnapshot>.broadcast();
   final _progressController = StreamController<EngineProgress>.broadcast();
   final _eventController = StreamController<EngineEvent>.broadcast();
@@ -761,11 +765,19 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
   Future<String?> _pickExportPath() async {
     if (defaultTargetPlatform == TargetPlatform.android) {
-      final directory = await getDirectoryPath(confirmButtonText: 'Export here');
-      if (directory == null || directory.trim().isEmpty) return null;
-      final trimmed = directory.trim();
-      final separator = trimmed.endsWith('/') || trimmed.endsWith('\\') ? '' : '/';
-      return _normalizedExportPath('${trimmed}${separator}digitor-export.mp4');
+      final target = await _androidExportChannel.invokeMapMethod<String, Object?>(
+        'prepareExport',
+        const <String, Object>{'displayName': 'digitor-export.mp4'},
+      );
+      final stagingPath = target?['stagingPath'];
+      if (stagingPath is! String || stagingPath.trim().isEmpty) {
+        throw StateError('Android export staging path is unavailable.');
+      }
+      _debug(
+        'Android export staging=${stagingPath.trim()} '
+        'collection=${target?['collection']}',
+      );
+      return _normalizedExportPath(stagingPath.trim());
     }
 
     FileSaveLocation? location;
@@ -776,6 +788,39 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     }
     if (location == null) return null;
     return _normalizedExportPath(location.path);
+  }
+
+  Future<String> _publishAndroidExport(String stagingPath) async {
+    final published = await _androidExportChannel.invokeMapMethod<String, Object?>(
+      'publishExport',
+      <String, Object>{'stagingPath': stagingPath},
+    );
+    if (published == null) {
+      throw StateError('Android MediaStore returned no published export.');
+    }
+    final displayPath = published['displayPath'];
+    final uri = published['uri'];
+    final visiblePath = displayPath is String && displayPath.trim().isNotEmpty
+        ? displayPath.trim()
+        : uri is String && uri.trim().isNotEmpty
+            ? uri.trim()
+            : null;
+    if (visiblePath == null) {
+      throw StateError('Android MediaStore returned no export location.');
+    }
+    _debug('Android export published path=$visiblePath uri=$uri');
+    return visiblePath;
+  }
+
+  Future<void> _discardAndroidExport(String stagingPath) async {
+    try {
+      await _androidExportChannel.invokeMethod<void>(
+        'discardExport',
+        <String, Object>{'stagingPath': stagingPath},
+      );
+    } catch (error) {
+      _debug('Android export staging cleanup failed: $error');
+    }
   }
 
   Future<void> _exportCurrentMedia() async {
@@ -835,34 +880,48 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
       await Future<void>.delayed(Duration.zero);
 
-      _w.exportMedia(
-        path: outputPath,
-        firstFrame: firstFrame,
-        lastFrame: lastFrame,
-        width: media.firstFrame.width,
-        height: media.firstFrame.height,
-        format: _exportFormat,
-        codec: _exportCodec,
-        onProgress: (progress) {
-          if (!_disposed) {
-            _progressController.add(
-              EngineProgress(operation: 'export', fraction: progress.fraction),
-            );
-          }
-        },
-      );
-      if (!_disposed) {
-        _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+      var nativeExportCompleted = false;
+      try {
+        _w.exportMedia(
+          path: outputPath,
+          firstFrame: firstFrame,
+          lastFrame: lastFrame,
+          width: media.firstFrame.width,
+          height: media.firstFrame.height,
+          format: _exportFormat,
+          codec: _exportCodec,
+          onProgress: (progress) {
+            if (!_disposed) {
+              _progressController.add(
+                EngineProgress(operation: 'export', fraction: progress.fraction),
+              );
+            }
+          },
+        );
+        nativeExportCompleted = true;
+
+        final publishedPath = defaultTargetPlatform == TargetPlatform.android
+            ? await _publishAndroidExport(outputPath)
+            : outputPath;
+        if (!_disposed) {
+          _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+        }
+        _debug(
+          'export completed $publishedPath '
+          'format=${_exportFormat.name} codec=${_exportCodec.name}',
+        );
+        _event('exportCompleted', <String, Object?>{
+          'path': publishedPath,
+          'format': _exportFormat.name,
+          'codec': _exportCodec.name,
+        });
+      } catch (_) {
+        if (defaultTargetPlatform == TargetPlatform.android &&
+            !nativeExportCompleted) {
+          await _discardAndroidExport(outputPath);
+        }
+        rethrow;
       }
-      _debug(
-        'export completed $outputPath '
-        'format=${_exportFormat.name} codec=${_exportCodec.name}',
-      );
-      _event('exportCompleted', <String, Object?>{
-        'path': outputPath,
-        'format': _exportFormat.name,
-        'codec': _exportCodec.name,
-      });
     } finally {
       _exportInFlight = false;
     }
