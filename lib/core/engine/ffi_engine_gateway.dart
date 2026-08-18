@@ -483,11 +483,31 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   }
 
   Future<void> _importMedia() async {
-    final file = await openFile();
-    if (file == null) return;
-    _debug('opening ${file.path}');
-    final media = _w.openMedia(file.path);
-    _mediaPath = file.path;
+    late final String mediaPath;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final selected = await _androidExportChannel.invokeMapMethod<String, Object?>(
+        'pickMediaImport',
+      );
+      if (selected == null) return;
+      final path = selected['path'];
+      if (path is! String || path.trim().isEmpty) {
+        throw StateError('Android media picker returned no staged file path.');
+      }
+      mediaPath = path.trim();
+      _debug(
+        'Android media staged path=$mediaPath '
+        'name=${selected['displayName']} size=${selected['size']} '
+        'mime=${selected['mimeType']}',
+      );
+    } else {
+      final file = await openFile();
+      if (file == null) return;
+      mediaPath = file.path;
+    }
+
+    _debug('opening $mediaPath');
+    final media = _w.openMedia(mediaPath);
+    _mediaPath = mediaPath;
     _projectOpen = true;
     _lastPreviewPositionUs = -1;
     _lastPreviewGraphRevision = -1;
