@@ -20,6 +20,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   bool _disposed = false;
   bool _projectOpen = false;
   bool _previewInFlight = false;
+  bool _exportInFlight = false;
   String? _mediaPath;
   int? _previewTextureId;
   int _previewWidth = 0;
@@ -754,13 +755,13 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     return '$path$extension';
   }
 
-  Future<void> _exportCurrentMedia() async {
-    final media = _w.media;
-    if (media == null || _mediaPath == null) {
-      throw StateError('Import media before export.');
-    }
-    if (!_w.productionReady) {
-      throw StateError('Native production host is not registered for export.');
+  Future<String?> _pickExportPath() async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final directory = await getDirectoryPath(confirmButtonText: 'Export here');
+      if (directory == null || directory.trim().isEmpty) return null;
+      final trimmed = directory.trim();
+      final separator = trimmed.endsWith('/') || trimmed.endsWith('\\') ? '' : '/';
+      return _normalizedExportPath('${trimmed}${separator}digitor-export.mp4');
     }
 
     FileSaveLocation? location;
@@ -769,67 +770,89 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     } on UnsupportedError {
       location = null;
     }
-    if (location == null) {
-      _event('exportLocationRequired', const <String, Object?>{});
+    if (location == null) return null;
+    return _normalizedExportPath(location.path);
+  }
+
+  Future<void> _exportCurrentMedia() async {
+    if (_exportInFlight) {
+      _debug('duplicate export request ignored while export is active');
       return;
     }
-    final outputPath = _normalizedExportPath(location.path);
+    _exportInFlight = true;
+    try {
+      final media = _w.media;
+      if (media == null || _mediaPath == null) {
+        throw StateError('Import media before export.');
+      }
+      if (!_w.productionReady) {
+        throw StateError('Native production host is not registered for export.');
+      }
 
-    final status = _w.timelineStatus();
-    final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
-        ? media.firstFrame.duration.inMicroseconds
-        : 33333;
-    final durationUs = status.durationUs > 0
-        ? status.durationUs
-        : media.duration.inMicroseconds;
-    if (durationUs <= 0) {
-      throw StateError('Native media duration is unavailable for full export.');
+      final outputPath = await _pickExportPath();
+      if (outputPath == null) {
+        _event('exportLocationRequired', const <String, Object?>{});
+        return;
+      }
+
+      final status = _w.timelineStatus();
+      final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
+          ? media.firstFrame.duration.inMicroseconds
+          : 33333;
+      final durationUs = status.durationUs > 0
+          ? status.durationUs
+          : media.duration.inMicroseconds;
+      if (durationUs <= 0) {
+        throw StateError('Native media duration is unavailable for full export.');
+      }
+      final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
+          .clamp(1, 1 << 30)
+          .toInt();
+      final firstFrame = media.firstFrame.frameNumber;
+      final lastFrame = firstFrame + frameCount - 1;
+      _debug(
+        'export range first=$firstFrame last=$lastFrame frames=$frameCount '
+        'durationUs=$durationUs frameDurationUs=$frameDurationUs',
+      );
+
+      _event('exportStarted', <String, Object?>{
+        'path': outputPath,
+        'frames': frameCount,
+        'durationUs': durationUs,
+        'format': _exportFormat.name,
+        'codec': _exportCodec.name,
+      });
+      _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
+      await Future<void>.delayed(Duration.zero);
+
+      _w.exportMedia(
+        path: outputPath,
+        firstFrame: firstFrame,
+        lastFrame: lastFrame,
+        width: media.firstFrame.width,
+        height: media.firstFrame.height,
+        format: _exportFormat,
+        codec: _exportCodec,
+        onProgress: (progress) {
+          if (!_disposed) {
+            _progressController.add(
+              EngineProgress(operation: 'export', fraction: progress.fraction),
+            );
+          }
+        },
+      );
+      if (!_disposed) {
+        _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+      }
+      _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
+      _event('exportCompleted', <String, Object?>{
+        'path': outputPath,
+        'format': _exportFormat.name,
+        'codec': _exportCodec.name,
+      });
+    } finally {
+      _exportInFlight = false;
     }
-    final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
-        .clamp(1, 1 << 30)
-        .toInt();
-    final firstFrame = media.firstFrame.frameNumber;
-    final lastFrame = firstFrame + frameCount - 1;
-    _debug(
-      'export range first=$firstFrame last=$lastFrame frames=$frameCount '
-      'durationUs=$durationUs frameDurationUs=$frameDurationUs',
-    );
-
-    _event('exportStarted', <String, Object?>{
-      'path': outputPath,
-      'frames': frameCount,
-      'durationUs': durationUs,
-      'format': _exportFormat.name,
-      'codec': _exportCodec.name,
-    });
-    _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
-    await Future<void>.delayed(Duration.zero);
-
-    _w.exportMedia(
-      path: outputPath,
-      firstFrame: firstFrame,
-      lastFrame: lastFrame,
-      width: media.firstFrame.width,
-      height: media.firstFrame.height,
-      format: _exportFormat,
-      codec: _exportCodec,
-      onProgress: (progress) {
-        if (!_disposed) {
-          _progressController.add(
-            EngineProgress(operation: 'export', fraction: progress.fraction),
-          );
-        }
-      },
-    );
-    if (!_disposed) {
-      _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
-    }
-    _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
-    _event('exportCompleted', <String, Object?>{
-      'path': outputPath,
-      'format': _exportFormat.name,
-      'codec': _exportCodec.name,
-    });
   }
 
   void _emitDiagnostics() {
