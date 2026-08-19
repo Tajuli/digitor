@@ -470,10 +470,18 @@ class _MobilePreview extends StatelessWidget {
                   color: Colors.black,
                   child: textureId == null
                       ? _EmptyPreview(onImport: onImport)
-                      : Texture(
-                          textureId: textureId,
-                          filterQuality: FilterQuality.medium,
-                        ),
+                      : Theme.of(context).platform == TargetPlatform.android
+                          ? Transform.flip(
+                              flipY: true,
+                              child: Texture(
+                                textureId: textureId,
+                                filterQuality: FilterQuality.medium,
+                              ),
+                            )
+                          : Texture(
+                              textureId: textureId,
+                              filterQuality: FilterQuality.medium,
+                            ),
                 ),
               ),
             ),
