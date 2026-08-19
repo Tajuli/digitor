@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:digitor_engine_ffi/digitor_engine_ffi.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'engine_feature_catalog.dart';
 import 'engine_gateway.dart';
@@ -11,6 +12,9 @@ import 'engine_gateway.dart';
 /// Direct DigitorEngine integration. Flutter owns UI state only; decode,
 /// rendering, grading, node execution, playback and export remain in Engine.
 final class DigitorFfiEngineGateway implements EngineGateway {
+  static const MethodChannel _androidExportChannel =
+      MethodChannel('digitor_engine_ffi/platform_host');
+
   final _snapshotController = StreamController<EngineSnapshot>.broadcast();
   final _progressController = StreamController<EngineProgress>.broadcast();
   final _eventController = StreamController<EngineEvent>.broadcast();
@@ -20,6 +24,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   bool _disposed = false;
   bool _projectOpen = false;
   bool _previewInFlight = false;
+  bool _exportInFlight = false;
   String? _mediaPath;
   int? _previewTextureId;
   int _previewWidth = 0;
@@ -478,11 +483,31 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   }
 
   Future<void> _importMedia() async {
-    final file = await openFile();
-    if (file == null) return;
-    _debug('opening ${file.path}');
-    final media = _w.openMedia(file.path);
-    _mediaPath = file.path;
+    late final String mediaPath;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final selected = await _androidExportChannel.invokeMapMethod<String, Object?>(
+        'pickMediaImport',
+      );
+      if (selected == null) return;
+      final path = selected['path'];
+      if (path is! String || path.trim().isEmpty) {
+        throw StateError('Android media picker returned no staged file path.');
+      }
+      mediaPath = path.trim();
+      _debug(
+        'Android media staged path=$mediaPath '
+        'name=${selected['displayName']} size=${selected['size']} '
+        'mime=${selected['mimeType']}',
+      );
+    } else {
+      final file = await openFile();
+      if (file == null) return;
+      mediaPath = file.path;
+    }
+
+    _debug('opening $mediaPath');
+    final media = _w.openMedia(mediaPath);
+    _mediaPath = mediaPath;
     _projectOpen = true;
     _lastPreviewPositionUs = -1;
     _lastPreviewGraphRevision = -1;
@@ -502,6 +527,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'gpuResident': media.firstFrame.gpuResident,
       'cpuResident': media.firstFrame.cpuResident,
     });
+    _debug(
+      'media durationUs=${media.duration.inMicroseconds} '
+      'frameDurationUs=${media.firstFrame.duration.inMicroseconds}',
+    );
     await _renderPreview(force: true);
   }
 
@@ -754,13 +783,21 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     return '$path$extension';
   }
 
-  Future<void> _exportCurrentMedia() async {
-    final media = _w.media;
-    if (media == null || _mediaPath == null) {
-      throw StateError('Import media before export.');
-    }
-    if (!_w.productionReady) {
-      throw StateError('Native production host is not registered for export.');
+  Future<String?> _pickExportPath() async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final target = await _androidExportChannel.invokeMapMethod<String, Object?>(
+        'prepareExport',
+        const <String, Object>{'displayName': 'digitor-export.mp4'},
+      );
+      final stagingPath = target?['stagingPath'];
+      if (stagingPath is! String || stagingPath.trim().isEmpty) {
+        throw StateError('Android export staging path is unavailable.');
+      }
+      _debug(
+        'Android export staging=${stagingPath.trim()} '
+        'collection=${target?['collection']}',
+      );
+      return _normalizedExportPath(stagingPath.trim());
     }
 
     FileSaveLocation? location;
@@ -769,67 +806,145 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     } on UnsupportedError {
       location = null;
     }
-    if (location == null) {
-      _event('exportLocationRequired', const <String, Object?>{});
+    if (location == null) return null;
+    return _normalizedExportPath(location.path);
+  }
+
+  Future<String> _publishAndroidExport(String stagingPath) async {
+    final published = await _androidExportChannel.invokeMapMethod<String, Object?>(
+      'publishExport',
+      <String, Object>{'stagingPath': stagingPath},
+    );
+    if (published == null) {
+      throw StateError('Android MediaStore returned no published export.');
+    }
+    final displayPath = published['displayPath'];
+    final uri = published['uri'];
+    final visiblePath = displayPath is String && displayPath.trim().isNotEmpty
+        ? displayPath.trim()
+        : uri is String && uri.trim().isNotEmpty
+            ? uri.trim()
+            : null;
+    if (visiblePath == null) {
+      throw StateError('Android MediaStore returned no export location.');
+    }
+    _debug('Android export published path=$visiblePath uri=$uri');
+    return visiblePath;
+  }
+
+  Future<void> _discardAndroidExport(String stagingPath) async {
+    try {
+      await _androidExportChannel.invokeMethod<void>(
+        'discardExport',
+        <String, Object>{'stagingPath': stagingPath},
+      );
+    } catch (error) {
+      _debug('Android export staging cleanup failed: $error');
+    }
+  }
+
+  Future<void> _exportCurrentMedia() async {
+    if (_exportInFlight) {
+      _debug('duplicate export request ignored while export is active');
       return;
     }
-    final outputPath = _normalizedExportPath(location.path);
+    _exportInFlight = true;
+    try {
+      final media = _w.media;
+      if (media == null || _mediaPath == null) {
+        throw StateError('Import media before export.');
+      }
+      if (!_w.productionReady) {
+        throw StateError('Native production host is not registered for export.');
+      }
 
-    final status = _w.timelineStatus();
-    final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
-        ? media.firstFrame.duration.inMicroseconds
-        : 33333;
-    final durationUs = status.durationUs > 0
-        ? status.durationUs
-        : media.duration.inMicroseconds;
-    if (durationUs <= 0) {
-      throw StateError('Native media duration is unavailable for full export.');
-    }
-    final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
-        .clamp(1, 1 << 30)
-        .toInt();
-    final firstFrame = media.firstFrame.frameNumber;
-    final lastFrame = firstFrame + frameCount - 1;
-    _debug(
-      'export range first=$firstFrame last=$lastFrame frames=$frameCount '
-      'durationUs=$durationUs frameDurationUs=$frameDurationUs',
-    );
+      final outputPath = await _pickExportPath();
+      if (outputPath == null) {
+        _event('exportLocationRequired', const <String, Object?>{});
+        return;
+      }
 
-    _event('exportStarted', <String, Object?>{
-      'path': outputPath,
-      'frames': frameCount,
-      'durationUs': durationUs,
-      'format': _exportFormat.name,
-      'codec': _exportCodec.name,
-    });
-    _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
-    await Future<void>.delayed(Duration.zero);
+      final status = _w.timelineStatus();
+      final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
+          ? media.firstFrame.duration.inMicroseconds
+          : 33333;
+      final durationUs = status.durationUs > 0
+          ? status.durationUs
+          : media.duration.inMicroseconds;
+      _debug(
+        'export destination=$outputPath durationUs=$durationUs '
+        'timelineDurationUs=${status.durationUs} '
+        'mediaDurationUs=${media.duration.inMicroseconds} '
+        'frameDurationUs=$frameDurationUs codec=${_exportCodec.name}',
+      );
+      if (durationUs <= 0) {
+        throw StateError('Native media duration is unavailable for full export.');
+      }
+      final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
+          .clamp(1, 1 << 30)
+          .toInt();
+      final firstFrame = media.firstFrame.frameNumber;
+      final lastFrame = firstFrame + frameCount - 1;
+      _debug(
+        'export range first=$firstFrame last=$lastFrame frames=$frameCount '
+        'durationUs=$durationUs frameDurationUs=$frameDurationUs',
+      );
 
-    _w.exportMedia(
-      path: outputPath,
-      firstFrame: firstFrame,
-      lastFrame: lastFrame,
-      width: media.firstFrame.width,
-      height: media.firstFrame.height,
-      format: _exportFormat,
-      codec: _exportCodec,
-      onProgress: (progress) {
+      _event('exportStarted', <String, Object?>{
+        'path': outputPath,
+        'frames': frameCount,
+        'durationUs': durationUs,
+        'format': _exportFormat.name,
+        'codec': _exportCodec.name,
+      });
+      _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
+      await Future<void>.delayed(Duration.zero);
+
+      var nativeExportCompleted = false;
+      try {
+        _w.exportMedia(
+          path: outputPath,
+          firstFrame: firstFrame,
+          lastFrame: lastFrame,
+          width: media.firstFrame.width,
+          height: media.firstFrame.height,
+          format: _exportFormat,
+          codec: _exportCodec,
+          onProgress: (progress) {
+            if (!_disposed) {
+              _progressController.add(
+                EngineProgress(operation: 'export', fraction: progress.fraction),
+              );
+            }
+          },
+        );
+        nativeExportCompleted = true;
+
+        final publishedPath = defaultTargetPlatform == TargetPlatform.android
+            ? await _publishAndroidExport(outputPath)
+            : outputPath;
         if (!_disposed) {
-          _progressController.add(
-            EngineProgress(operation: 'export', fraction: progress.fraction),
-          );
+          _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
         }
-      },
-    );
-    if (!_disposed) {
-      _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+        _debug(
+          'export completed $publishedPath '
+          'format=${_exportFormat.name} codec=${_exportCodec.name}',
+        );
+        _event('exportCompleted', <String, Object?>{
+          'path': publishedPath,
+          'format': _exportFormat.name,
+          'codec': _exportCodec.name,
+        });
+      } catch (_) {
+        if (defaultTargetPlatform == TargetPlatform.android &&
+            !nativeExportCompleted) {
+          await _discardAndroidExport(outputPath);
+        }
+        rethrow;
+      }
+    } finally {
+      _exportInFlight = false;
     }
-    _debug('export completed $outputPath format=${_exportFormat.name} codec=${_exportCodec.name}');
-    _event('exportCompleted', <String, Object?>{
-      'path': outputPath,
-      'format': _exportFormat.name,
-      'codec': _exportCodec.name,
-    });
   }
 
   void _emitDiagnostics() {

@@ -8,21 +8,29 @@ import 'ffi_engine_gateway.dart';
 
 /// Startup-safe facade for the DigitorEngine-backed application gateway.
 ///
-/// DigitorEngine's native runtime must be initialized before the Flutter
-/// production host can be resolved. All UI commands also await the same
-/// initialization future, so an early tap cannot reach the FFI gateway while
-/// its workspace is still null.
+/// Android Flutter preview is render-target driven. The current qualified
+/// SurfaceProducer presenter is OpenGL ES, so AUTO must be resolved before the
+/// process-wide DigitorEngine singleton is initialized. Once initialized, the
+/// backend remains locked for the lifetime of that engine instance.
 final class BootstrappedDigitorEngineGateway implements EngineGateway {
   BootstrappedDigitorEngineGateway({DigitorFfiEngineGateway? inner})
-      : _inner = inner ?? DigitorFfiEngineGateway();
+      : _inner = inner ?? DigitorFfiEngineGateway() {
+    _snapshotSubscription = _inner.snapshots.listen(
+      _snapshotController.add,
+      onError: _snapshotController.addError,
+    );
+  }
 
   final DigitorFfiEngineGateway _inner;
+  final StreamController<EngineSnapshot> _snapshotController =
+      StreamController<EngineSnapshot>.broadcast();
+  StreamSubscription<EngineSnapshot>? _snapshotSubscription;
   Future<void>? _initializing;
   bool _initialized = false;
   bool _disposed = false;
 
   @override
-  Stream<EngineSnapshot> get snapshots => _inner.snapshots;
+  Stream<EngineSnapshot> get snapshots => _snapshotController.stream;
 
   @override
   Stream<EngineProgress> get progress => _inner.progress;
@@ -43,10 +51,35 @@ final class BootstrappedDigitorEngineGateway implements EngineGateway {
 
   Future<void> _initializeOnce() async {
     try {
-      // Loading/initializing the engine first is required by the production
-      // bootstrap contract. DigitorEditorWorkspace.create() inside the inner
-      // gateway reuses this process-wide engine instance.
-      final engine = DigitorEngine.initialize();
+      var preferredBackend = DigitorBackend.automatic;
+      DigitorFlutterHostCapabilities? hostCapabilities;
+
+      // Probe the Flutter texture host before initializing the process-wide
+      // engine. Android SurfaceProducer currently has a production-qualified
+      // GLES presenter, while Vulkan has no qualified presenter yet.
+      if (!kIsWeb) {
+        final host = DigitorFlutterPlatformHost();
+        try {
+          hostCapabilities = await host.capabilities();
+          if (defaultTargetPlatform == TargetPlatform.android &&
+              hostCapabilities.platform == 'android' &&
+              hostCapabilities.renderTargetPresentation) {
+            preferredBackend = DigitorBackend.openGles;
+          }
+        } catch (_) {
+          // Keep AUTO when platform capability probing is unavailable. Native
+          // backend selection/fallback policy remains authoritative.
+        } finally {
+          await host.close();
+        }
+      }
+
+      // The native asset must be initialized before production registration.
+      // Selecting GLES here is critical: DigitorEngine.initialize() is
+      // process-wide and later workspace initialization reuses this instance.
+      final engine = DigitorEngine.initialize(
+        preferredBackend: preferredBackend,
+      );
       final renderer = engine.rendererInfo;
 
       final bootstrap = await DigitorFlutterProductionBootstrap.resolve();
@@ -96,6 +129,8 @@ final class BootstrappedDigitorEngineGateway implements EngineGateway {
         // cleanup of the inner gateway.
       }
     }
+    await _snapshotSubscription?.cancel();
     await _inner.dispose();
+    await _snapshotController.close();
   }
 }
