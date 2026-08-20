@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/engine/engine_feature_catalog.dart';
 import '../../../core/engine/engine_gateway.dart';
+import 'mobile_multitrack_timeline.dart';
 import 'professional_color_wheels.dart';
 
 class MobileEditorScreen extends StatefulWidget {
@@ -221,8 +222,12 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
                 builder: (context, constraints) {
                   final compact = constraints.maxHeight < 610;
                   final veryCompact = constraints.maxHeight < 500;
+                  final isAndroid =
+                      Theme.of(context).platform == TargetPlatform.android;
                   final showTimeline = feature == null || !veryCompact;
-                  final timelineHeight = compact ? 108.0 : 132.0;
+                  final timelineHeight = isAndroid
+                      ? (compact ? 192.0 : 224.0)
+                      : (compact ? 108.0 : 132.0);
                   final inspectorHeight = veryCompact
                       ? 150.0
                       : compact
@@ -247,12 +252,32 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
                       if (showTimeline)
                         SizedBox(
                           height: timelineHeight,
-                          child: _MobileTimeline(
-                            snapshot: snapshot,
-                            onImport: () =>
-                                _dispatch('media.import', 'requestPicker'),
-                            onEdit: () => _selectWorkspace(EngineWorkspace.edit),
-                          ),
+                          child: isAndroid
+                              ? MobileMultitrackTimeline(
+                                  snapshot: snapshot,
+                                  onImport: () => _dispatch(
+                                    'media.import',
+                                    'requestPicker',
+                                  ),
+                                  onEdit: () =>
+                                      _selectWorkspace(EngineWorkspace.edit),
+                                  onSeekUs: (value) => unawaited(
+                                    _dispatch(
+                                      'playback.transport',
+                                      'seek',
+                                      value,
+                                    ),
+                                  ),
+                                )
+                              : _MobileTimeline(
+                                  snapshot: snapshot,
+                                  onImport: () => _dispatch(
+                                    'media.import',
+                                    'requestPicker',
+                                  ),
+                                  onEdit: () =>
+                                      _selectWorkspace(EngineWorkspace.edit),
+                                ),
                         ),
                       if (feature != null)
                         SizedBox(
