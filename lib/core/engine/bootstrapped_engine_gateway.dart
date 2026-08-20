@@ -26,6 +26,7 @@ final class BootstrappedDigitorEngineGateway implements EngineGateway {
       StreamController<EngineSnapshot>.broadcast();
   StreamSubscription<EngineSnapshot>? _snapshotSubscription;
   Future<void>? _initializing;
+  Future<void> _dispatchTail = Future<void>.value();
   bool _initialized = false;
   bool _disposed = false;
 
@@ -111,15 +112,38 @@ final class BootstrappedDigitorEngineGateway implements EngineGateway {
   }
 
   @override
-  Future<void> dispatch(EngineIntent intent) async {
-    await initialize();
-    await _inner.dispatch(intent);
+  Future<void> dispatch(EngineIntent intent) {
+    // Mobile controls deliberately dispatch without awaiting every gesture
+    // sample. Keep the engine boundary single-filed so a later graph mutation
+    // cannot overtake the preview produced for the previous mutation. Export
+    // is queued behind the same barrier, preserving the native preview/export
+    // revision contract instead of bypassing its stale-preview guard.
+    final operation = _dispatchTail.then((_) async {
+      await initialize();
+      if (_disposed) {
+        throw StateError('DigitorEngine gateway has been disposed.');
+      }
+      await _inner.dispatch(intent);
+    });
+
+    // A failed command must still surface to its caller, but it must not poison
+    // the queue and block all later Retry/edit/export commands.
+    _dispatchTail = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return operation;
   }
 
   @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    try {
+      await _dispatchTail;
+    } catch (_) {
+      // Individual dispatch failures are already surfaced to their callers.
+    }
     final initializing = _initializing;
     if (initializing != null) {
       try {
