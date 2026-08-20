@@ -21,22 +21,23 @@ class MobileMultitrackTimeline extends StatefulWidget {
       _MobileMultitrackTimelineState();
 }
 
+enum _TrackKind { video, audio }
+
 class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
   static const double _trackHeaderWidth = 54;
   static const double _rulerHeight = 24;
+  static const double _trackHeight = 34;
   static const double _pixelsPerSecond = 46;
   static const Color _playheadColor = Color(0xFFFF4D4D);
-  static const List<String> _trackLabels = <String>[
-    'V3',
-    'V2',
-    'V1',
-    'A1',
-    'A2',
-    'A3',
-  ];
+  static const int _maxTracksPerType = 32;
 
   final ScrollController _horizontalController = ScrollController();
+  final ScrollController _verticalController = ScrollController();
   final GlobalKey _contentKey = GlobalKey();
+
+  int _videoTrackCount = 1;
+  int _audioTrackCount = 1;
+  String? _selectedClipId;
 
   String? get _mediaPath => widget.snapshot.state['mediaPath']?.toString();
 
@@ -46,10 +47,45 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
     return path.replaceAll('\\', '/').split('/').last;
   }
 
+  List<String> get _trackLabels => <String>[
+        for (int index = _videoTrackCount; index >= 1; index--) 'V$index',
+        for (int index = 1; index <= _audioTrackCount; index++) 'A$index',
+      ];
+
+  @override
+  void didUpdateWidget(covariant MobileMultitrackTimeline oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldPath = oldWidget.snapshot.state['mediaPath']?.toString();
+    final newPath = widget.snapshot.state['mediaPath']?.toString();
+    if (oldPath != newPath && _selectedClipId != null) {
+      _selectedClipId = null;
+    }
+  }
+
   @override
   void dispose() {
     _horizontalController.dispose();
+    _verticalController.dispose();
     super.dispose();
+  }
+
+  void _addTrack(_TrackKind kind) {
+    setState(() {
+      switch (kind) {
+        case _TrackKind.video:
+          if (_videoTrackCount < _maxTracksPerType) {
+            _videoTrackCount += 1;
+          }
+        case _TrackKind.audio:
+          if (_audioTrackCount < _maxTracksPerType) {
+            _audioTrackCount += 1;
+          }
+      }
+    });
+  }
+
+  void _selectClip(String clipId) {
+    setState(() => _selectedClipId = clipId);
   }
 
   void _seekAt(double x, double contentWidth) {
@@ -70,6 +106,7 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
 
   @override
   Widget build(BuildContext context) {
+    final labels = _trackLabels;
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xFF0B0B0F),
@@ -84,183 +121,159 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
             position: widget.snapshot.position,
             onImport: widget.onImport,
             onEdit: widget.onEdit,
+            onAddTrack: _addTrack,
+            canAddVideo: _videoTrackCount < _maxTracksPerType,
+            canAddAudio: _audioTrackCount < _maxTracksPerType,
           ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final viewportWidth =
-                    (constraints.maxWidth - _trackHeaderWidth)
-                        .clamp(1.0, double.infinity)
-                        .toDouble();
-                final seconds = widget.snapshot.duration.inMilliseconds / 1000.0;
+                final rawViewportWidth =
+                    constraints.maxWidth - _trackHeaderWidth;
+                final viewportWidth = rawViewportWidth > 1
+                    ? rawViewportWidth
+                    : 1.0;
+                final seconds =
+                    widget.snapshot.duration.inMilliseconds / 1000.0;
                 final requestedWidth = seconds <= 0
                     ? viewportWidth * 1.6
                     : seconds * _pixelsPerSecond;
                 final contentWidth = requestedWidth
                     .clamp(viewportWidth, 8000.0)
                     .toDouble();
-                final availableForTracks =
-                    (constraints.maxHeight - _rulerHeight)
-                        .clamp(0.0, double.infinity)
-                        .toDouble();
-                final trackHeight =
-                    (availableForTracks / _trackLabels.length)
-                        .clamp(20.0, 32.0)
-                        .toDouble();
                 final durationUs = widget.snapshot.duration.inMicroseconds;
                 final positionUs = widget.snapshot.position.inMicroseconds;
                 final positionFraction = durationUs <= 0
                     ? 0.0
                     : (positionUs / durationUs).clamp(0.0, 1.0).toDouble();
                 final playheadX = positionFraction * contentWidth;
+                final playheadHeaderMax =
+                    contentWidth > 26 ? contentWidth - 26 : 0.0;
+                final playheadHeaderLeft =
+                    (playheadX - 13).clamp(0.0, playheadHeaderMax).toDouble();
+                final fullContentHeight =
+                    _rulerHeight + labels.length * _trackHeight;
 
-                return Row(
-                  children: <Widget>[
-                    SizedBox(
-                      width: _trackHeaderWidth,
-                      child: Column(
+                return Scrollbar(
+                  controller: _verticalController,
+                  thumbVisibility: labels.length > 4,
+                  child: SingleChildScrollView(
+                    controller: _verticalController,
+                    scrollDirection: Axis.vertical,
+                    child: SizedBox(
+                      height: fullContentHeight,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          Container(
-                            height: _rulerHeight,
-                            alignment: Alignment.center,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF111116),
-                              border: Border(
-                                right: BorderSide(color: Color(0xFF2B2B31)),
-                                bottom: BorderSide(color: Color(0xFF2B2B31)),
-                              ),
-                            ),
-                            child: const Text(
-                              'TC',
-                              style: TextStyle(
-                                fontSize: 8,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white38,
-                              ),
-                            ),
-                          ),
-                          for (final label in _trackLabels)
-                            _TrackHeader(
-                              label: label,
-                              height: trackHeight,
-                              active: label == 'V1' || label == 'A1',
-                            ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        controller: _horizontalController,
-                        scrollDirection: Axis.horizontal,
-                        child: SizedBox(
-                          key: _contentKey,
-                          width: contentWidth,
-                          height: constraints.maxHeight,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTapDown: (details) =>
-                                _seekAt(details.localPosition.dx, contentWidth),
-                            child: Stack(
-                              clipBehavior: Clip.none,
+                          SizedBox(
+                            width: _trackHeaderWidth,
+                            child: Column(
                               children: <Widget>[
-                                Column(
-                                  children: <Widget>[
-                                    SizedBox(
-                                      height: _rulerHeight,
-                                      child: _TimelineRuler(
-                                        width: contentWidth,
-                                        duration: widget.snapshot.duration,
-                                      ),
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'V3',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: true,
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'V2',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: true,
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'V1',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: true,
-                                      clipTitle: _mediaPath == null ? null : _mediaName,
-                                      duration: widget.snapshot.duration,
-                                      onEmptyTap: _mediaPath == null
-                                          ? widget.onImport
-                                          : null,
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'A1',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: false,
-                                      clipTitle: _mediaPath == null ? null : _mediaName,
-                                      duration: widget.snapshot.duration,
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'A2',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: false,
-                                    ),
-                                    _TimelineTrackLane(
-                                      label: 'A3',
-                                      height: trackHeight,
-                                      contentWidth: contentWidth,
-                                      isVideo: false,
-                                    ),
-                                  ],
-                                ),
-                                Positioned(
-                                  left: playheadX - 0.75,
-                                  top: _rulerHeight - 2,
-                                  bottom: 0,
-                                  child: IgnorePointer(
-                                    child: Container(
-                                      width: 1.5,
-                                      color: _playheadColor,
-                                    ),
+                                const _TimelineCorner(),
+                                for (final label in labels)
+                                  _TrackHeader(
+                                    label: label,
+                                    height: _trackHeight,
+                                    hasClip: _mediaPath != null &&
+                                        (label == 'V1' || label == 'A1'),
                                   ),
-                                ),
-                                Positioned(
-                                  left: (playheadX - 13)
-                                      .clamp(0.0, contentWidth - 26)
-                                      .toDouble(),
-                                  top: 0,
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onHorizontalDragStart: (details) =>
-                                        _seekFromGlobal(
-                                      details.globalPosition,
-                                      contentWidth,
-                                    ),
-                                    onHorizontalDragUpdate: (details) =>
-                                        _seekFromGlobal(
-                                      details.globalPosition,
-                                      contentWidth,
-                                    ),
-                                    child: const SizedBox(
-                                      width: 26,
-                                      height: 25,
-                                      child: Center(
-                                        child: _PlayheadHeader(),
-                                      ),
-                                    ),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
-                        ),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              controller: _horizontalController,
+                              scrollDirection: Axis.horizontal,
+                              child: SizedBox(
+                                key: _contentKey,
+                                width: contentWidth,
+                                height: fullContentHeight,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: <Widget>[
+                                    Column(
+                                      children: <Widget>[
+                                        SizedBox(
+                                          height: _rulerHeight,
+                                          child: _TimelineRuler(
+                                            width: contentWidth,
+                                            duration: widget.snapshot.duration,
+                                          ),
+                                        ),
+                                        for (final label in labels)
+                                          _TimelineTrackLane(
+                                            label: label,
+                                            height: _trackHeight,
+                                            contentWidth: contentWidth,
+                                            isVideo: label.startsWith('V'),
+                                            clipTitle: _mediaPath != null &&
+                                                    (label == 'V1' ||
+                                                        label == 'A1')
+                                                ? _mediaName
+                                                : null,
+                                            duration: widget.snapshot.duration,
+                                            selected: _selectedClipId == label,
+                                            onClipTap: _mediaPath != null &&
+                                                    (label == 'V1' ||
+                                                        label == 'A1')
+                                                ? () => _selectClip(label)
+                                                : null,
+                                            onEmptyTap: _mediaPath == null &&
+                                                    label == 'V1'
+                                                ? widget.onImport
+                                                : null,
+                                          ),
+                                      ],
+                                    ),
+                                    Positioned(
+                                      left: playheadX - 0.75,
+                                      top: _rulerHeight - 2,
+                                      bottom: 0,
+                                      child: IgnorePointer(
+                                        child: Container(
+                                          width: 1.5,
+                                          color: _playheadColor,
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      left: playheadHeaderLeft,
+                                      top: 0,
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTapDown: (details) =>
+                                            _seekFromGlobal(
+                                          details.globalPosition,
+                                          contentWidth,
+                                        ),
+                                        onHorizontalDragStart: (details) =>
+                                            _seekFromGlobal(
+                                          details.globalPosition,
+                                          contentWidth,
+                                        ),
+                                        onHorizontalDragUpdate: (details) =>
+                                            _seekFromGlobal(
+                                          details.globalPosition,
+                                          contentWidth,
+                                        ),
+                                        child: const SizedBox(
+                                          width: 26,
+                                          height: _rulerHeight,
+                                          child: Center(
+                                            child: _PlayheadHeader(),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 );
               },
             ),
@@ -276,15 +289,21 @@ class _TimelineToolbar extends StatelessWidget {
     required this.position,
     required this.onImport,
     required this.onEdit,
+    required this.onAddTrack,
+    required this.canAddVideo,
+    required this.canAddAudio,
   });
 
   final Duration position;
   final VoidCallback onImport;
   final VoidCallback onEdit;
+  final ValueChanged<_TrackKind> onAddTrack;
+  final bool canAddVideo;
+  final bool canAddAudio;
 
   @override
   Widget build(BuildContext context) => Container(
-        height: 28,
+        height: 30,
         padding: const EdgeInsets.only(left: 9, right: 3),
         decoration: const BoxDecoration(
           color: Color(0xFF0E0E12),
@@ -315,27 +334,72 @@ class _TimelineToolbar extends StatelessWidget {
               ),
               child: Text(
                 _timelineClock(position),
-                style: const TextStyle(
-                  fontSize: 8,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
-                  color: Colors.white54,
-                ),
+                style: const TextStyle(fontSize: 8, color: Colors.white54),
               ),
             ),
             const Spacer(),
+            PopupMenuButton<_TrackKind>(
+              tooltip: 'Add track',
+              enabled: canAddVideo || canAddAudio,
+              onSelected: onAddTrack,
+              itemBuilder: (context) => <PopupMenuEntry<_TrackKind>>[
+                PopupMenuItem<_TrackKind>(
+                  value: _TrackKind.video,
+                  enabled: canAddVideo,
+                  child: const Row(
+                    children: <Widget>[
+                      Icon(Icons.videocam_outlined, size: 17),
+                      SizedBox(width: 8),
+                      Text('Add video track'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<_TrackKind>(
+                  value: _TrackKind.audio,
+                  enabled: canAddAudio,
+                  child: const Row(
+                    children: <Widget>[
+                      Icon(Icons.volume_up_outlined, size: 17),
+                      SizedBox(width: 8),
+                      Text('Add audio track'),
+                    ],
+                  ),
+                ),
+              ],
+              child: Container(
+                height: 24,
+                padding: const EdgeInsets.symmetric(horizontal: 7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF17171C),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(Icons.add_rounded, size: 14, color: Colors.white70),
+                    SizedBox(width: 3),
+                    Text(
+                      'Track',
+                      style: TextStyle(fontSize: 8, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             IconButton(
               tooltip: 'Import media',
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 28, height: 28),
               onPressed: onImport,
-              icon: const Icon(Icons.add_rounded, size: 17),
+              icon: const Icon(Icons.add_photo_alternate_outlined, size: 16),
             ),
             TextButton.icon(
               onPressed: onEdit,
               style: TextButton.styleFrom(
                 visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
               ),
               icon: const Icon(Icons.content_cut_rounded, size: 12),
               label: const Text('Edit', style: TextStyle(fontSize: 8)),
@@ -345,16 +409,41 @@ class _TimelineToolbar extends StatelessWidget {
       );
 }
 
+class _TimelineCorner extends StatelessWidget {
+  const _TimelineCorner();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: _MobileMultitrackTimelineState._rulerHeight,
+        alignment: Alignment.center,
+        decoration: const BoxDecoration(
+          color: Color(0xFF111116),
+          border: Border(
+            right: BorderSide(color: Color(0xFF2B2B31)),
+            bottom: BorderSide(color: Color(0xFF2B2B31)),
+          ),
+        ),
+        child: const Text(
+          'TC',
+          style: TextStyle(
+            fontSize: 8,
+            fontWeight: FontWeight.w600,
+            color: Colors.white38,
+          ),
+        ),
+      );
+}
+
 class _TrackHeader extends StatelessWidget {
   const _TrackHeader({
     required this.label,
     required this.height,
-    required this.active,
+    required this.hasClip,
   });
 
   final String label;
   final double height;
-  final bool active;
+  final bool hasClip;
 
   bool get _isVideo => label.startsWith('V');
 
@@ -362,7 +451,7 @@ class _TrackHeader extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         height: height,
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF18181E) : const Color(0xFF121217),
+          color: hasClip ? const Color(0xFF18181E) : const Color(0xFF121217),
           border: Border(
             right: const BorderSide(color: Color(0xFF2B2B31)),
             bottom: const BorderSide(color: Color(0xFF24242A)),
@@ -376,7 +465,7 @@ class _TrackHeader extends StatelessWidget {
             Container(
               width: 3,
               height: double.infinity,
-              color: active
+              color: hasClip
                   ? (_isVideo
                       ? const Color(0xFF607D9B)
                       : const Color(0xFF3E7569))
@@ -388,14 +477,14 @@ class _TrackHeader extends StatelessWidget {
               style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
-                color: active ? Colors.white70 : Colors.white38,
+                color: hasClip ? Colors.white70 : Colors.white45,
               ),
             ),
             const Spacer(),
             Icon(
               _isVideo ? Icons.videocam_outlined : Icons.volume_up_outlined,
               size: 11,
-              color: active ? Colors.white38 : Colors.white24,
+              color: hasClip ? Colors.white38 : Colors.white24,
             ),
             const SizedBox(width: 5),
           ],
@@ -427,12 +516,13 @@ class _TimelineRuler extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = _totalSeconds;
     final step = _majorStep;
+    final labelMaxX = width > 34 ? width - 34 : 0.0;
     final ticks = <Widget>[];
     for (double second = 0; second <= total; second += step) {
       final x = (second / total) * width;
       ticks.add(
         Positioned(
-          left: x.clamp(0.0, width - 34).toDouble(),
+          left: x.clamp(0.0, labelMaxX).toDouble(),
           top: 0,
           bottom: 0,
           child: SizedBox(
@@ -477,8 +567,10 @@ class _TimelineTrackLane extends StatelessWidget {
     required this.height,
     required this.contentWidth,
     required this.isVideo,
+    required this.selected,
     this.clipTitle,
     this.duration = Duration.zero,
+    this.onClipTap,
     this.onEmptyTap,
   });
 
@@ -486,8 +578,10 @@ class _TimelineTrackLane extends StatelessWidget {
   final double height;
   final double contentWidth;
   final bool isVideo;
+  final bool selected;
   final String? clipTitle;
   final Duration duration;
+  final VoidCallback? onClipTap;
   final VoidCallback? onEmptyTap;
 
   @override
@@ -518,6 +612,8 @@ class _TimelineTrackLane extends StatelessWidget {
                 title: clipTitle!,
                 duration: duration,
                 isVideo: isVideo,
+                selected: selected,
+                onTap: onClipTap,
               ),
             )
           else if (onEmptyTap != null)
@@ -560,61 +656,100 @@ class _TrackClip extends StatelessWidget {
     required this.title,
     required this.duration,
     required this.isVideo,
+    required this.selected,
+    required this.onTap,
   });
 
   final String title;
   final Duration duration;
   final bool isVideo;
+  final bool selected;
+  final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) => Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: isVideo ? const Color(0xFF27313C) : const Color(0xFF173B34),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-            color: isVideo ? const Color(0xFF52677C) : const Color(0xFF35685E),
-          ),
-        ),
-        child: Stack(
-          children: <Widget>[
-            Positioned.fill(
-              child: Opacity(
-                opacity: 0.28,
-                child: isVideo ? const _VideoPattern() : const _AudioPattern(),
-              ),
+  Widget build(BuildContext context) {
+    final selectedColor = Theme.of(context).colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: isVideo ? const Color(0xFF27313C) : const Color(0xFF173B34),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              width: selected ? 2 : 1,
+              color: selected
+                  ? selectedColor
+                  : isVideo
+                      ? const Color(0xFF52677C)
+                      : const Color(0xFF35685E),
             ),
-            Positioned(
-              left: 6,
-              right: 6,
-              bottom: 2,
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    isVideo ? Icons.movie_outlined : Icons.graphic_eq_rounded,
-                    size: 10,
-                    color: Colors.white60,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 7.5, color: Colors.white70),
+          ),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: Opacity(
+                  opacity: 0.28,
+                  child: isVideo ? const _VideoPattern() : const _AudioPattern(),
+                ),
+              ),
+              Positioned(
+                left: 6,
+                right: 6,
+                bottom: 2,
+                child: Row(
+                  children: <Widget>[
+                    Icon(
+                      isVideo ? Icons.movie_outlined : Icons.graphic_eq_rounded,
+                      size: 10,
+                      color: Colors.white60,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 7.5, color: Colors.white70),
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      _durationLabel(duration),
+                      style: const TextStyle(fontSize: 7, color: Colors.white38),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                Positioned(
+                  top: 2,
+                  right: 3,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: selectedColor,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: const Text(
+                      'Selected',
+                      style: TextStyle(
+                        fontSize: 6.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 5),
-                  Text(
-                    _durationLabel(duration),
-                    style: const TextStyle(fontSize: 7, color: Colors.white38),
-                  ),
-                ],
-              ),
-            ),
-          ],
+                ),
+            ],
+          ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _VideoPattern extends StatelessWidget {
