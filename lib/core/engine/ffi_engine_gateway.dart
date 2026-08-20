@@ -24,7 +24,13 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   bool _disposed = false;
   bool _projectOpen = false;
   bool _previewInFlight = false;
+  bool _exportPreparing = false;
+  bool _exportRequested = false;
   bool _exportInFlight = false;
+  Future<void>? _activePreview;
+  Future<void> _recipeMutationTail = Future<void>.value();
+  int _recipeRequestSerial = 0;
+  int _recipeAppliedSerial = 0;
   String? _mediaPath;
   int? _previewTextureId;
   int _previewWidth = 0;
@@ -105,7 +111,14 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   Future<void> _pollEngine() async {
     if (_disposed || _workspace == null) return;
     _emitSnapshot();
-    if (_mediaPath == null || !_w.productionReady || _previewInFlight) return;
+    if (_mediaPath == null ||
+        !_w.productionReady ||
+        _previewInFlight ||
+        _exportPreparing ||
+        _exportRequested ||
+        _exportInFlight) {
+      return;
+    }
     final status = _w.timelineStatus();
     final graphChanged = _lastPreviewGraphRevision != _w.graphRevision ||
         _lastPreviewParameterRevision != _w.parameterRevision;
@@ -118,10 +131,28 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     }
   }
 
-  Future<void> _renderPreview({bool force = false}) async {
-    if (_disposed || _previewInFlight || _mediaPath == null || !_w.productionReady) {
-      return;
+  Future<void> _renderPreview({bool force = false}) {
+    final active = _activePreview;
+    if (active != null) return active;
+    if (_disposed ||
+        _mediaPath == null ||
+        !_w.productionReady ||
+        _exportRequested ||
+        _exportInFlight) {
+      return Future<void>.value();
     }
+
+    late final Future<void> task;
+    task = _renderPreviewImpl(force: force).whenComplete(() {
+      if (identical(_activePreview, task)) {
+        _activePreview = null;
+      }
+    });
+    _activePreview = task;
+    return task;
+  }
+
+  Future<void> _renderPreviewImpl({required bool force}) async {
     final media = _w.media;
     if (media == null) return;
     final status = _w.timelineStatus();
@@ -135,6 +166,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
     _previewInFlight = true;
     try {
+      final graphRevision = _w.graphRevision;
+      final parameterRevision = _w.parameterRevision;
       final preview = await _w.presentPreview(
         timestampUs: status.positionUs,
         width: media.firstFrame.width,
@@ -145,11 +178,12 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       _previewHeight = preview.height;
       _previewGeneration = preview.generation;
       _lastPreviewPositionUs = preview.timestampUs;
-      _lastPreviewGraphRevision = _w.graphRevision;
-      _lastPreviewParameterRevision = _w.parameterRevision;
+      _lastPreviewGraphRevision = graphRevision;
+      _lastPreviewParameterRevision = parameterRevision;
       _debug(
         'preview generation=${preview.generation} texture=${preview.textureId} '
-        '${preview.width}x${preview.height} t=${preview.timestampUs}',
+        '${preview.width}x${preview.height} t=${preview.timestampUs} '
+        'graph=$graphRevision params=$parameterRevision',
       );
       _emitSnapshot(message: 'Preview frame ${preview.generation}');
     } catch (error, stack) {
@@ -718,7 +752,31 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         blue: DigitorCurveChannel(points: _curvePoints['blue']!),
       );
 
-  Future<void> _rebuildSelectedOperations() async {
+  Future<void> _rebuildSelectedOperations() {
+    final requestedSerial = ++_recipeRequestSerial;
+    final previous = _recipeMutationTail;
+    final scheduled = previous.catchError((Object _) {}).then((_) async {
+      if (_disposed || requestedSerial != _recipeRequestSerial) return;
+
+      final preview = _activePreview;
+      if (preview != null) await preview;
+      if (_disposed || requestedSerial != _recipeRequestSerial) return;
+
+      // Export freezes one immutable graph/parameter revision. UI changes that
+      // arrive while an export is being prepared/running stay in the Flutter
+      // value model and are applied immediately after the export barrier ends.
+      if (_exportRequested || _exportInFlight) return;
+
+      _applySelectedOperations();
+      _recipeAppliedSerial = requestedSerial;
+      _emitSnapshot(message: 'Recipe ${_w.recipeIdentity}');
+      await _renderPreview(force: true);
+    });
+    _recipeMutationTail = scheduled;
+    return scheduled;
+  }
+
+  void _applySelectedOperations() {
     _w.clearSelectedOperations();
     if (_values.keys.any((key) => key.startsWith('correction.'))) {
       _w.addCorrection(
@@ -770,8 +828,6 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         ),
       );
     }
-    _emitSnapshot(message: 'Recipe ${_w.recipeIdentity}');
-    await _renderPreview(force: true);
   }
 
   String _normalizedExportPath(String path) {
@@ -844,12 +900,21 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   }
 
   Future<void> _exportCurrentMedia() async {
-    if (_exportInFlight) {
+    if (_exportPreparing || _exportRequested || _exportInFlight) {
       _debug('duplicate export request ignored while export is active');
       return;
     }
-    _exportInFlight = true;
+    _exportPreparing = true;
     try {
+      // Freeze only after all accepted recipe mutations and any outstanding
+      // preview presentation have completed. This prevents export from seeing
+      // a graph revision that is still being rebound by a UI gesture.
+      await _recipeMutationTail.catchError((Object _) {});
+      final preview = _activePreview;
+      if (preview != null) await preview;
+      _exportRequested = true;
+      _exportPreparing = false;
+      _exportInFlight = true;
       final media = _w.media;
       if (media == null || _mediaPath == null) {
         throw StateError('Import media before export.');
@@ -944,6 +1009,13 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       }
     } finally {
       _exportInFlight = false;
+      _exportRequested = false;
+      _exportPreparing = false;
+      if (!_disposed && _recipeAppliedSerial != _recipeRequestSerial) {
+        unawaited(_rebuildSelectedOperations());
+      } else if (!_disposed) {
+        unawaited(_renderPreview(force: true));
+      }
     }
   }
 
