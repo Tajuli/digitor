@@ -76,10 +76,12 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
           if (_videoTrackCount < _maxTracksPerType) {
             _videoTrackCount += 1;
           }
+          break;
         case _TrackKind.audio:
           if (_audioTrackCount < _maxTracksPerType) {
             _audioTrackCount += 1;
           }
+          break;
       }
     });
   }
@@ -477,7 +479,7 @@ class _TrackHeader extends StatelessWidget {
               style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
-                color: hasClip ? Colors.white70 : Colors.white45,
+                color: hasClip ? Colors.white70 : Colors.white38,
               ),
             ),
             const Spacer(),
