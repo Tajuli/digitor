@@ -31,14 +31,18 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   Future<void> _recipeMutationTail = Future<void>.value();
   int _recipeRequestSerial = 0;
   int _recipeAppliedSerial = 0;
+  int _mediaImportSerial = 0;
   String? _mediaPath;
   int? _previewTextureId;
   int _previewWidth = 0;
   int _previewHeight = 0;
-  int _previewGeneration = 0;
   int _lastPreviewPositionUs = -1;
   int _lastPreviewGraphRevision = -1;
   int _lastPreviewParameterRevision = -1;
+  int _projectWidth = 0;
+  int _projectHeight = 0;
+  int _projectFpsNum = 30;
+  int _projectFpsDen = 1;
   DigitorExportFormat _exportFormat = DigitorExportFormat.mp4;
   DigitorVideoCodec _exportCodec = DigitorVideoCodec.h264;
 
@@ -83,6 +87,9 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     try {
       final workspace = await DigitorEditorWorkspace.create();
       _workspace = workspace;
+      installEngineTimelinePublisher((timeline) {
+        unawaited(_configureProductionTimeline(timeline));
+      });
       _statusTimer = Timer.periodic(
         const Duration(milliseconds: 80),
         (_) => unawaited(_pollEngine()),
@@ -103,6 +110,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         'platformHost': workspace.hostCapabilities?.platform,
       });
     } catch (error, stack) {
+      installEngineTimelinePublisher(null);
       _debug('initialize failed: $error\n$stack');
       rethrow;
     }
@@ -168,21 +176,23 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     try {
       final graphRevision = _w.graphRevision;
       final parameterRevision = _w.parameterRevision;
+      final width = _projectWidth > 0 ? _projectWidth : media.firstFrame.width;
+      final height = _projectHeight > 0 ? _projectHeight : media.firstFrame.height;
       final preview = await _w.presentPreview(
         timestampUs: status.positionUs,
-        width: media.firstFrame.width,
-        height: media.firstFrame.height,
+        width: width,
+        height: height,
       );
       _previewTextureId = preview.textureId;
       _previewWidth = preview.width;
       _previewHeight = preview.height;
-      _previewGeneration = preview.generation;
       _lastPreviewPositionUs = preview.timestampUs;
       _lastPreviewGraphRevision = graphRevision;
       _lastPreviewParameterRevision = parameterRevision;
       _debug(
         'preview generation=${preview.generation} texture=${preview.textureId} '
         '${preview.width}x${preview.height} t=${preview.timestampUs} '
+        'projectTimeline=${_w.productionTimelineConfigured} '
         'graph=$graphRevision params=$parameterRevision',
       );
       _emitSnapshot(message: 'Preview frame ${preview.generation}');
@@ -268,8 +278,14 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         return;
       }
       if (action == 'project.lifecycle.new') {
+        if (_workspace != null) await _w.releaseProductionSession();
         _projectOpen = true;
         _mediaPath = null;
+        _mediaImportSerial = 0;
+        _projectWidth = 0;
+        _projectHeight = 0;
+        _projectFpsNum = 30;
+        _projectFpsDen = 1;
         _previewTextureId = null;
         _values.clear();
         _flags.clear();
@@ -516,6 +532,85 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     }
   }
 
+  Future<void> _configureProductionTimeline(
+    Map<String, Object?> payload,
+  ) async {
+    if (_disposed || _workspace == null) return;
+    try {
+      final serialized = payload['serializedProject'];
+      final revision = payload['revision'];
+      final durationUs = payload['durationUs'];
+      final videoTrackCount = payload['videoTrackCount'];
+      final audioTrackCount = payload['audioTrackCount'];
+      final fpsNum = payload['fpsNum'];
+      final fpsDen = payload['fpsDen'];
+      final rawSources = payload['sources'];
+      if (serialized is! String || serialized.isEmpty ||
+          revision is! num || durationUs is! num ||
+          videoTrackCount is! num || audioTrackCount is! num ||
+          fpsNum is! num || fpsDen is! num || rawSources is! List) {
+        throw ArgumentError('Mobile timeline publication is incomplete.');
+      }
+
+      final sources = <DigitorTimelineMediaSource>[];
+      for (final raw in rawSources) {
+        if (raw is! Map) {
+          throw ArgumentError('Timeline source registry entry is invalid.');
+        }
+        final group = raw['sourceMediaGroupId']?.toString() ?? '';
+        final path = raw['path']?.toString() ?? '';
+        if (group.isEmpty || path.isEmpty) {
+          throw ArgumentError('Timeline source id/path is missing.');
+        }
+        sources.add(
+          DigitorTimelineMediaSource(
+            sourceMediaGroupId: group,
+            path: path,
+          ),
+        );
+      }
+      final activePreview = _activePreview;
+      if (activePreview != null) await activePreview;
+      if (_disposed) return;
+
+      final media = _w.media;
+      if (media == null) {
+        throw StateError('Import media before publishing the project timeline.');
+      }
+      if (_projectWidth == 0 || _projectHeight == 0) {
+        _projectWidth = media.firstFrame.width;
+        _projectHeight = media.firstFrame.height;
+      }
+      _projectFpsNum = fpsNum.toInt();
+      _projectFpsDen = fpsDen.toInt();
+      _w.configureProductionTimeline(
+        serializedProject: serialized,
+        sources: sources,
+        revision: revision.toInt(),
+        durationUs: durationUs.toInt(),
+        videoTrackCount: videoTrackCount.toInt(),
+        audioTrackCount: audioTrackCount.toInt(),
+        fpsNum: _projectFpsNum,
+        fpsDen: _projectFpsDen,
+      );
+      final requestedPosition = payload['positionUs'];
+      if (requestedPosition is num) {
+        _w.seek(requestedPosition.toInt());
+      }
+      _lastPreviewPositionUs = -1;
+      _lastPreviewGraphRevision = -1;
+      _lastPreviewParameterRevision = -1;
+      _emitSnapshot(message: 'Project timeline ${revision.toInt()}');
+      await _renderPreview(force: true);
+    } catch (error, stack) {
+      _debug('timeline configure failed: $error\n$stack');
+      _event('engineError', <String, Object?>{
+        'action': 'timeline.project.configure',
+        'error': '$error',
+      });
+    }
+  }
+
   Future<void> _importMedia() async {
     late final String mediaPath;
     if (defaultTargetPlatform == TargetPlatform.android) {
@@ -542,13 +637,19 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     _debug('opening $mediaPath');
     final media = _w.openMedia(mediaPath);
     _mediaPath = mediaPath;
+    _mediaImportSerial += 1;
     _projectOpen = true;
+    if (_projectWidth == 0 || _projectHeight == 0) {
+      _projectWidth = media.firstFrame.width;
+      _projectHeight = media.firstFrame.height;
+    }
     _lastPreviewPositionUs = -1;
     _lastPreviewGraphRevision = -1;
     _lastPreviewParameterRevision = -1;
     _emitSnapshot(message: 'Media opened');
     _event('mediaOpened', <String, Object?>{
       'path': media.path,
+      'importSerial': _mediaImportSerial,
       'decoder': media.decoder.implementation,
       'hardwareAccelerated': media.decoder.hardwareAccelerated,
       'nativeSurfaceOutput': media.decoder.nativeSurfaceOutput,
@@ -565,7 +666,12 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'media durationUs=${media.duration.inMicroseconds} '
       'frameDurationUs=${media.firstFrame.duration.inMicroseconds}',
     );
-    await _renderPreview(force: true);
+    // For subsequent imports the mobile timeline immediately republishes the
+    // full project and that render is authoritative. Avoid doing redundant
+    // single-source preview work between import and project publication.
+    if (_mediaImportSerial == 1) {
+      await _renderPreview(force: true);
+    }
   }
 
   Future<void> _handleTransport(String action, Object? value) async {
@@ -579,10 +685,16 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         }
         break;
       case 'playback.transport.previousFrame':
-        _w.seek((status.positionUs - 33333).clamp(0, 1 << 62).toInt());
+        final stepUs = _projectFpsNum > 0
+            ? (1000000 * _projectFpsDen / _projectFpsNum).round()
+            : 33333;
+        _w.seek((status.positionUs - stepUs).clamp(0, 1 << 62).toInt());
         break;
       case 'playback.transport.nextFrame':
-        _w.seek((status.positionUs + 33333).clamp(0, 1 << 62).toInt());
+        final stepUs = _projectFpsNum > 0
+            ? (1000000 * _projectFpsDen / _projectFpsNum).round()
+            : 33333;
+        _w.seek((status.positionUs + stepUs).clamp(0, 1 << 62).toInt());
         break;
       case 'playback.transport.stop':
         _w.stop();
@@ -933,35 +1045,46 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       }
 
       final status = _w.timelineStatus();
-      final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
-          ? media.firstFrame.duration.inMicroseconds
-          : 33333;
+      final projectTimeline = _w.productionTimelineConfigured;
       final durationUs = status.durationUs > 0
           ? status.durationUs
           : media.duration.inMicroseconds;
+      if (durationUs <= 0) {
+        throw StateError('Native timeline duration is unavailable for full export.');
+      }
+
+      late final int firstFrame;
+      late final int frameCount;
+      if (projectTimeline) {
+        final denominator = 1000000 * _projectFpsDen;
+        frameCount = ((durationUs * _projectFpsNum + denominator - 1) ~/ denominator)
+            .clamp(1, 1 << 30)
+            .toInt();
+        firstFrame = 0;
+      } else {
+        final frameDurationUs = media.firstFrame.duration.inMicroseconds > 0
+            ? media.firstFrame.duration.inMicroseconds
+            : 33333;
+        frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
+            .clamp(1, 1 << 30)
+            .toInt();
+        firstFrame = media.firstFrame.frameNumber;
+      }
+      final lastFrame = firstFrame + frameCount - 1;
+      final width = _projectWidth > 0 ? _projectWidth : media.firstFrame.width;
+      final height = _projectHeight > 0 ? _projectHeight : media.firstFrame.height;
       _debug(
         'export destination=$outputPath durationUs=$durationUs '
-        'timelineDurationUs=${status.durationUs} '
-        'mediaDurationUs=${media.duration.inMicroseconds} '
-        'frameDurationUs=$frameDurationUs codec=${_exportCodec.name}',
-      );
-      if (durationUs <= 0) {
-        throw StateError('Native media duration is unavailable for full export.');
-      }
-      final frameCount = ((durationUs + frameDurationUs - 1) ~/ frameDurationUs)
-          .clamp(1, 1 << 30)
-          .toInt();
-      final firstFrame = media.firstFrame.frameNumber;
-      final lastFrame = firstFrame + frameCount - 1;
-      _debug(
-        'export range first=$firstFrame last=$lastFrame frames=$frameCount '
-        'durationUs=$durationUs frameDurationUs=$frameDurationUs',
+        'timelineDurationUs=${status.durationUs} projectTimeline=$projectTimeline '
+        'fps=$_projectFpsNum/$_projectFpsDen range=$firstFrame..$lastFrame '
+        'size=${width}x$height codec=${_exportCodec.name}',
       );
 
       _event('exportStarted', <String, Object?>{
         'path': outputPath,
         'frames': frameCount,
         'durationUs': durationUs,
+        'projectTimeline': projectTimeline,
         'format': _exportFormat.name,
         'codec': _exportCodec.name,
       });
@@ -976,8 +1099,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
           path: outputPath,
           firstFrame: firstFrame,
           lastFrame: lastFrame,
-          width: media.firstFrame.width,
-          height: media.firstFrame.height,
+          width: width,
+          height: height,
           format: _exportFormat,
           codec: _exportCodec,
           onProgress: (progress) {
@@ -1047,8 +1170,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       'timelinePublications': telemetry.publications,
       'productionHostRegistered': _w.productionHostRegistered,
       'productionReady': _w.productionReady,
+      'productionTimelineConfigured': _w.productionTimelineConfigured,
       'previewTextureId': _previewTextureId,
-      'previewGeneration': _previewGeneration,
     });
   }
 
@@ -1067,15 +1190,20 @@ final class DigitorFfiEngineGateway implements EngineGateway {
           'device': _w.renderer.deviceName,
           'isGpu': _w.renderer.isGpu,
           'mediaPath': _mediaPath,
+          'mediaImportSerial': _mediaImportSerial,
           'recipeIdentity': _w.recipeIdentity,
           'graphRevision': _w.graphRevision,
           'parameterRevision': _w.parameterRevision,
           'productionHostRegistered': _w.productionHostRegistered,
           'productionReady': _w.productionReady,
+          'productionTimelineConfigured': _w.productionTimelineConfigured,
+          'projectWidth': _projectWidth,
+          'projectHeight': _projectHeight,
+          'projectFpsNum': _projectFpsNum,
+          'projectFpsDen': _projectFpsDen,
           'previewTextureId': _previewTextureId,
           'previewWidth': _previewWidth,
           'previewHeight': _previewHeight,
-          'previewGeneration': _previewGeneration,
         },
         engineMessage: message,
       ),
@@ -1099,6 +1227,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    installEngineTimelinePublisher(null);
     _statusTimer?.cancel();
     final workspace = _workspace;
     _workspace = null;

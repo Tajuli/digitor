@@ -246,6 +246,7 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
                               value,
                             ),
                           ),
+                          onTimelineChanged: publishEngineTimeline,
                         )
                       : _MobileTimeline(
                           snapshot: snapshot,
