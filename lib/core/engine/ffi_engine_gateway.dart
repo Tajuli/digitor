@@ -679,11 +679,18 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       );
 
   DigitorLogWheels _logWheels() {
-    final rawShadow = (_values['log.shadowPivot'] ?? 0.33).clamp(0.05, 0.60).toDouble();
+    final rawShadow =
+        (_values['log.shadowPivot'] ?? 0.33).clamp(0.05, 0.60).toDouble();
     final rawHighlight =
         (_values['log.highlightPivot'] ?? 0.67).clamp(0.40, 0.95).toDouble();
-    final shadow = math.min(rawShadow, rawHighlight - 0.01).clamp(0.05, 0.60).toDouble();
-    final highlight = math.max(rawHighlight, shadow + 0.01).clamp(0.40, 0.95).toDouble();
+    final shadow = math
+        .min(rawShadow, rawHighlight - 0.01)
+        .clamp(0.05, 0.60)
+        .toDouble();
+    final highlight = math
+        .max(rawHighlight, shadow + 0.01)
+        .clamp(0.40, 0.95)
+        .toDouble();
     return DigitorLogWheels(
       shadows: _logWheel('shadows'),
       midtones: _logWheel('midtones'),
@@ -691,8 +698,9 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       global: _logWheel('global'),
       shadowPivot: shadow,
       highlightPivot: highlight,
-      transitionWidth:
-          (_values['log.transitionWidth'] ?? 0.10).clamp(0.01, 0.30).toDouble(),
+      transitionWidth: (_values['log.transitionWidth'] ?? 0.10)
+          .clamp(0.01, 0.30)
+          .toDouble(),
     );
   }
 
@@ -762,9 +770,6 @@ final class DigitorFfiEngineGateway implements EngineGateway {
       if (preview != null) await preview;
       if (_disposed || requestedSerial != _recipeRequestSerial) return;
 
-      // Export freezes one immutable graph/parameter revision. UI changes that
-      // arrive while an export is being prepared/running stay in the Flutter
-      // value model and are applied immediately after the export barrier ends.
       if (_exportRequested || _exportInFlight) return;
 
       _applySelectedOperations();
@@ -820,7 +825,8 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         _w.addEffect(DigitorNodeEffect(type: type, amount: amount));
       }
     }
-    if (_values.containsKey('window.feather') || _flags.containsKey('window.invert')) {
+    if (_values.containsKey('window.feather') ||
+        _flags.containsKey('window.invert')) {
       _w.addPowerWindow(
         DigitorPowerWindow(
           feather: _values['window.feather'] ?? 0.1,
@@ -906,9 +912,6 @@ final class DigitorFfiEngineGateway implements EngineGateway {
     }
     _exportPreparing = true;
     try {
-      // Freeze only after all accepted recipe mutations and any outstanding
-      // preview presentation have completed. This prevents export from seeing
-      // a graph revision that is still being rebound by a UI gesture.
       await _recipeMutationTail.catchError((Object _) {});
       final preview = _activePreview;
       if (preview != null) await preview;
@@ -962,12 +965,14 @@ final class DigitorFfiEngineGateway implements EngineGateway {
         'format': _exportFormat.name,
         'codec': _exportCodec.name,
       });
-      _progressController.add(const EngineProgress(operation: 'export', fraction: 0));
+      _progressController.add(
+        const EngineProgress(operation: 'export', fraction: 0),
+      );
       await Future<void>.delayed(Duration.zero);
 
       var nativeExportCompleted = false;
       try {
-        _w.exportMedia(
+        await _w.exportMedia(
           path: outputPath,
           firstFrame: firstFrame,
           lastFrame: lastFrame,
@@ -978,7 +983,10 @@ final class DigitorFfiEngineGateway implements EngineGateway {
           onProgress: (progress) {
             if (!_disposed) {
               _progressController.add(
-                EngineProgress(operation: 'export', fraction: progress.fraction),
+                EngineProgress(
+                  operation: 'export',
+                  fraction: progress.fraction,
+                ),
               );
             }
           },
@@ -989,7 +997,9 @@ final class DigitorFfiEngineGateway implements EngineGateway {
             ? await _publishAndroidExport(outputPath)
             : outputPath;
         if (!_disposed) {
-          _progressController.add(const EngineProgress(operation: 'export', fraction: 1));
+          _progressController.add(
+            const EngineProgress(operation: 'export', fraction: 1),
+          );
         }
         _debug(
           'export completed $publishedPath '
