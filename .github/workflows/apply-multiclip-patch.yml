@@ -6,6 +6,7 @@ on:
       - feature/mobile-multiclip-editing
     paths:
       - tools/apply_multiclip_patch.py
+      - .github/workflows/apply-multiclip-patch.yml
 
 permissions:
   contents: write
