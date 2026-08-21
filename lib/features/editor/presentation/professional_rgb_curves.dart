@@ -26,8 +26,11 @@ class _ProfessionalRgbCurvesControlsState
     'blue',
   ];
   static const double _edgePadding = 14;
-  static const double _hitRadius = 24;
+  static const double _hitRadius = 22;
   static const double _xGap = 0.002;
+  static const double _graphWidthFactor = 0.78;
+  static const double _minGraphWidth = 180;
+  static const double _maxGraphWidth = 320;
 
   final Map<String, List<_CurvePoint>> _points = <String, List<_CurvePoint>>{
     for (final channel in _channels)
@@ -117,6 +120,39 @@ class _ProfessionalRgbCurvesControlsState
     return nearest;
   }
 
+  int? _insertPoint(_CurvePoint point) {
+    final points = _activePoints;
+    final insertAt = points.indexWhere((item) => item.x > point.x);
+
+    if (insertAt == 0) {
+      final maxX = points.first.x - _xGap;
+      if (maxX < 0) return null;
+      points.insert(
+        0,
+        _CurvePoint(point.x.clamp(0.0, maxX).toDouble(), point.y),
+      );
+      return 0;
+    }
+
+    if (insertAt < 0) {
+      final minX = points.last.x + _xGap;
+      if (minX > 1) return null;
+      points.add(
+        _CurvePoint(point.x.clamp(minX, 1.0).toDouble(), point.y),
+      );
+      return points.length - 1;
+    }
+
+    final minX = points[insertAt - 1].x + _xGap;
+    final maxX = points[insertAt].x - _xGap;
+    if (minX > maxX) return null;
+    points.insert(
+      insertAt,
+      _CurvePoint(point.x.clamp(minX, maxX).toDouble(), point.y),
+    );
+    return insertAt;
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     if (!widget.supported || _activePointer != null) return;
     final renderObject = _graphKey.currentContext?.findRenderObject();
@@ -127,27 +163,13 @@ class _ProfessionalRgbCurvesControlsState
 
     setState(() {
       _activePointer = event.pointer;
-      if (selected == null) {
-        final point = _offsetToPoint(local, rect);
-        final points = _activePoints;
-        final insertAt = points.indexWhere((item) => item.x > point.x);
-        final rawIndex = insertAt < 0 ? points.length - 1 : insertAt;
-        final lower = points[rawIndex - 1].x + _xGap;
-        final upper = points[rawIndex].x - _xGap;
-        if (lower < upper) {
-          points.insert(
-            rawIndex,
-            _CurvePoint(point.x.clamp(lower, upper).toDouble(), point.y),
-          );
-          selected = rawIndex;
-        } else {
-          selected = rawIndex - 1;
-        }
-      }
+      selected ??= _insertPoint(_offsetToPoint(local, rect));
       _selectedIndex = selected;
     });
 
-    _updateSelected(local, rect, scheduleDispatch: true);
+    if (selected != null) {
+      _updateSelected(local, rect, scheduleDispatch: true);
+    }
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -174,16 +196,11 @@ class _ProfessionalRgbCurvesControlsState
     if (index < 0 || index >= points.length) return;
     final incoming = _offsetToPoint(position, rect);
 
-    double x;
-    if (index == 0) {
-      x = 0;
-    } else if (index == points.length - 1) {
-      x = 1;
-    } else {
-      final minX = points[index - 1].x + _xGap;
-      final maxX = points[index + 1].x - _xGap;
-      x = incoming.x.clamp(minX, maxX).toDouble();
-    }
+    final minX = index == 0 ? 0.0 : points[index - 1].x + _xGap;
+    final maxX = index == points.length - 1
+        ? 1.0
+        : points[index + 1].x - _xGap;
+    final x = incoming.x.clamp(minX, maxX).toDouble();
 
     setState(() {
       points[index] = _CurvePoint(x, incoming.y);
@@ -229,10 +246,13 @@ class _ProfessionalRgbCurvesControlsState
   void _deleteSelected() {
     final index = _selectedIndex;
     final points = _activePoints;
-    if (index == null || index <= 0 || index >= points.length - 1) return;
+    if (index == null || points.length <= 2) return;
+    if (index < 0 || index >= points.length) return;
+
     setState(() {
       points.removeAt(index);
       _selectedIndex = null;
+      _activePointer = null;
     });
     _dispatchPending = true;
     _flushDispatch();
@@ -266,9 +286,7 @@ class _ProfessionalRgbCurvesControlsState
             selectedIndex >= _activePoints.length
         ? null
         : _activePoints[selectedIndex];
-    final canDelete = selectedIndex != null &&
-        selectedIndex > 0 &&
-        selectedIndex < _activePoints.length - 1;
+    final canDelete = selectedIndex != null && _activePoints.length > 2;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
@@ -303,26 +321,46 @@ class _ProfessionalRgbCurvesControlsState
           ),
           const SizedBox(height: 4),
           Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Listener(
-                key: _graphKey,
-                behavior: HitTestBehavior.opaque,
-                onPointerDown: _onPointerDown,
-                onPointerMove: _onPointerMove,
-                onPointerUp: _onPointerUp,
-                onPointerCancel: _onPointerUp,
-                child: CustomPaint(
-                  painter: _RgbCurvePainter(
-                    points: List<_CurvePoint>.unmodifiable(_activePoints),
-                    selectedIndex: _selectedIndex,
-                    curveColor: accent,
-                    enabled: widget.supported,
-                    edgePadding: _edgePadding,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final graphWidth = (constraints.maxWidth * _graphWidthFactor)
+                    .clamp(
+                      constraints.maxWidth < _minGraphWidth
+                          ? constraints.maxWidth
+                          : _minGraphWidth,
+                      constraints.maxWidth < _maxGraphWidth
+                          ? constraints.maxWidth
+                          : _maxGraphWidth,
+                    )
+                    .toDouble();
+                return Center(
+                  child: SizedBox(
+                    width: graphWidth,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Listener(
+                        key: _graphKey,
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: _onPointerDown,
+                        onPointerMove: _onPointerMove,
+                        onPointerUp: _onPointerUp,
+                        onPointerCancel: _onPointerUp,
+                        child: CustomPaint(
+                          painter: _RgbCurvePainter(
+                            points:
+                                List<_CurvePoint>.unmodifiable(_activePoints),
+                            selectedIndex: _selectedIndex,
+                            curveColor: accent,
+                            enabled: widget.supported,
+                            edgePadding: _edgePadding,
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
                   ),
-                  child: const SizedBox.expand(),
-                ),
-              ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 5),
@@ -330,12 +368,16 @@ class _ProfessionalRgbCurvesControlsState
             height: 26,
             child: Row(
               children: <Widget>[
-                const Icon(Icons.touch_app_outlined, size: 13, color: Colors.white38),
+                const Icon(
+                  Icons.touch_app_outlined,
+                  size: 13,
+                  color: Colors.white38,
+                ),
                 const SizedBox(width: 5),
                 Expanded(
                   child: Text(
                     selectedPoint == null
-                        ? 'Tap empty graph to add · drag any point freely'
+                        ? 'Tap empty graph to add · drag every point in X/Y'
                         : 'Input ${(selectedPoint.x * 100).round()}  ·  Output ${(selectedPoint.y * 100).round()}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -343,11 +385,15 @@ class _ProfessionalRgbCurvesControlsState
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Delete selected point',
+                  tooltip: canDelete
+                      ? 'Delete selected point'
+                      : 'Keep at least two curve points',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(width: 30, height: 26),
-                  onPressed: widget.supported && canDelete ? _deleteSelected : null,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 30, height: 26),
+                  onPressed:
+                      widget.supported && canDelete ? _deleteSelected : null,
                   icon: const Icon(Icons.delete_outline_rounded, size: 16),
                 ),
               ],
@@ -374,7 +420,8 @@ class _CurveChannelButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: selected ? color.withValues(alpha: 0.14) : const Color(0xFF17171C),
+        color:
+            selected ? color.withValues(alpha: 0.14) : const Color(0xFF17171C),
         borderRadius: BorderRadius.circular(5),
         child: InkWell(
           borderRadius: BorderRadius.circular(5),
@@ -384,7 +431,9 @@ class _CurveChannelButton extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(5),
               border: Border.all(
-                color: selected ? color.withValues(alpha: 0.75) : Colors.white12,
+                color: selected
+                    ? color.withValues(alpha: 0.75)
+                    : Colors.white12,
               ),
             ),
             child: Text(
