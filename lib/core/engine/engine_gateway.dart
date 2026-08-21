@@ -2,6 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+typedef EngineTimelinePublisher = void Function(Map<String, Object?> timeline);
+
+EngineTimelinePublisher? _timelinePublisher;
+
+/// Registers the active editor gateway as the receiver for native timeline
+/// metadata published by the mobile timeline UI. This carries only the native
+/// serialized edit model/source registry; no pixels or renderer handles cross
+/// this Dart hook.
+void installEngineTimelinePublisher(EngineTimelinePublisher? publisher) {
+  _timelinePublisher = publisher;
+}
+
+void publishEngineTimeline(Map<String, Object?> timeline) {
+  _timelinePublisher?.call(timeline);
+}
+
 /// The only Dart-side boundary to DigitorEngine.
 /// Dart forwards user intent and renders read-only engine state. It never
 /// implements media processing, timeline logic, rendering, audio, or export.
