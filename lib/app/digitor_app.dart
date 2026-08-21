@@ -5,6 +5,7 @@ import '../core/engine/bootstrapped_engine_gateway.dart';
 import '../core/engine/engine_gateway.dart';
 import '../features/editor/presentation/editor_screen.dart';
 import '../features/editor/presentation/mobile_editor_screen.dart';
+import 'export_progress_overlay.dart';
 
 enum EditorSurfaceFamily { mobile, desktop }
 
@@ -45,6 +46,11 @@ class _DigitorAppState extends State<DigitorApp> {
       surface: const Color(0xFF101014),
     );
 
+    final editor = switch (editorSurfaceFamilyFor(defaultTargetPlatform)) {
+      EditorSurfaceFamily.mobile => MobileEditorScreen(engine: _engine),
+      EditorSurfaceFamily.desktop => EditorScreen(engine: _engine),
+    };
+
     return MaterialApp(
       title: 'Digitor',
       debugShowCheckedModeBanner: false,
@@ -73,10 +79,10 @@ class _DigitorAppState extends State<DigitorApp> {
           behavior: SnackBarBehavior.floating,
         ),
       ),
-      home: switch (editorSurfaceFamilyFor(defaultTargetPlatform)) {
-        EditorSurfaceFamily.mobile => MobileEditorScreen(engine: _engine),
-        EditorSurfaceFamily.desktop => EditorScreen(engine: _engine),
-      },
+      home: ExportProgressOverlay(
+        engine: _engine,
+        child: editor,
+      ),
     );
   }
 }

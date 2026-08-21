@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../../../core/engine/engine_feature_catalog.dart';
 import '../../../core/engine/engine_gateway.dart';
+import 'mobile_multitrack_timeline.dart';
 import 'professional_color_wheels.dart';
+import 'professional_rgb_curves.dart';
 
 class MobileEditorScreen extends StatefulWidget {
   const MobileEditorScreen({super.key, required this.engine});
@@ -220,16 +222,40 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxHeight < 610;
-                  final veryCompact = constraints.maxHeight < 500;
-                  final showTimeline = feature == null || !veryCompact;
-                  final timelineHeight = compact ? 108.0 : 132.0;
-                  final inspectorHeight = veryCompact
-                      ? 150.0
-                      : compact
-                          ? 184.0
-                          : 220.0;
+                  final isAndroid =
+                      Theme.of(context).platform == TargetPlatform.android;
+                  final timelineHeight = isAndroid
+                      ? (compact ? 192.0 : 224.0)
+                      : (compact ? 108.0 : 132.0);
                   final featureHeight = compact ? 58.0 : 64.0;
                   final workspaceHeight = compact ? 66.0 : 72.0;
+
+                  final timeline = isAndroid
+                      ? MobileMultitrackTimeline(
+                          snapshot: snapshot,
+                          onImport: () => _dispatch(
+                            'media.import',
+                            'requestPicker',
+                          ),
+                          onEdit: () =>
+                              _selectWorkspace(EngineWorkspace.edit),
+                          onSeekUs: (value) => unawaited(
+                            _dispatch(
+                              'playback.transport',
+                              'seek',
+                              value,
+                            ),
+                          ),
+                        )
+                      : _MobileTimeline(
+                          snapshot: snapshot,
+                          onImport: () => _dispatch(
+                            'media.import',
+                            'requestPicker',
+                          ),
+                          onEdit: () =>
+                              _selectWorkspace(EngineWorkspace.edit),
+                        );
 
                   return Column(
                     children: <Widget>[
@@ -244,37 +270,36 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
                         snapshot: snapshot,
                         dispatch: _dispatch,
                       ),
-                      if (showTimeline)
-                        SizedBox(
-                          height: timelineHeight,
-                          child: _MobileTimeline(
-                            snapshot: snapshot,
-                            onImport: () =>
-                                _dispatch('media.import', 'requestPicker'),
-                            onEdit: () => _selectWorkspace(EngineWorkspace.edit),
-                          ),
+                      SizedBox(
+                        height: timelineHeight,
+                        child: IndexedStack(
+                          index: feature == null ? 0 : 1,
+                          sizing: StackFit.expand,
+                          children: <Widget>[
+                            timeline,
+                            feature == null
+                                ? const SizedBox.shrink()
+                                : _MobileInspectorPanel(
+                                    key: ValueKey(feature.id),
+                                    feature: feature,
+                                    supported: _supported(feature.id),
+                                    sliders: sliders,
+                                    toggles: toggles,
+                                    choices: choices,
+                                    dispatch: _dispatch,
+                                    onSlider: (key, value) =>
+                                        setState(() => sliders[key] = value),
+                                    onToggle: (key, value) =>
+                                        setState(() => toggles[key] = value),
+                                    onChoice: (key, value) =>
+                                        setState(() => choices[key] = value),
+                                    onClose: () => setState(
+                                      () => selectedFeatureId = null,
+                                    ),
+                                  ),
+                          ],
                         ),
-                      if (feature != null)
-                        SizedBox(
-                          height: inspectorHeight,
-                          child: _MobileInspectorPanel(
-                            key: ValueKey(feature.id),
-                            feature: feature,
-                            supported: _supported(feature.id),
-                            sliders: sliders,
-                            toggles: toggles,
-                            choices: choices,
-                            dispatch: _dispatch,
-                            onSlider: (key, value) =>
-                                setState(() => sliders[key] = value),
-                            onToggle: (key, value) =>
-                                setState(() => toggles[key] = value),
-                            onChoice: (key, value) =>
-                                setState(() => choices[key] = value),
-                            onClose: () =>
-                                setState(() => selectedFeatureId = null),
-                          ),
-                        ),
+                      ),
                       SizedBox(
                         height: featureHeight,
                         child: _FeatureRibbon(
@@ -1158,6 +1183,12 @@ class _MobileInspectorPanel extends StatelessWidget {
           supported: supported,
           dispatch: dispatch,
         ),
+      );
+    }
+    if (feature.id == 'color.rgbCurves') {
+      return ProfessionalRgbCurvesControls(
+        supported: supported,
+        dispatch: dispatch,
       );
     }
 
