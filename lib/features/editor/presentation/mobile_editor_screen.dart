@@ -246,6 +246,15 @@ class _MobileEditorScreenState extends State<MobileEditorScreen> {
                               value,
                             ),
                           ),
+                          onSelectClip: (clipId) => unawaited(
+                            _dispatch('timeline.clip', 'select', clipId),
+                          ),
+                          onSplitSelected: () => unawaited(
+                            _dispatch('timeline.clip', 'split'),
+                          ),
+                          onDeleteSelected: () => unawaited(
+                            _dispatch('timeline.clip', 'deleteSelected'),
+                          ),
                         )
                       : _MobileTimeline(
                           snapshot: snapshot,
