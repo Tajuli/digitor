@@ -106,6 +106,26 @@ class _ProfessionalRgbCurvesControlsState
     return _CurvePoint(x, y);
   }
 
+  _CurvePoint _constrainStartPoint(_CurvePoint point, [Rect? rect]) {
+    final width = rect?.width ?? 1.0;
+    final height = rect?.height ?? 1.0;
+    final distanceToLeft = point.x * width;
+    final distanceToBottom = point.y * height;
+    return distanceToLeft <= distanceToBottom
+        ? _CurvePoint(0, point.y)
+        : _CurvePoint(point.x, 0);
+  }
+
+  _CurvePoint _constrainEndPoint(_CurvePoint point, [Rect? rect]) {
+    final width = rect?.width ?? 1.0;
+    final height = rect?.height ?? 1.0;
+    final distanceToRight = (1 - point.x) * width;
+    final distanceToTop = (1 - point.y) * height;
+    return distanceToRight <= distanceToTop
+        ? _CurvePoint(1, point.y)
+        : _CurvePoint(point.x, 1);
+  }
+
   int? _nearestPoint(Offset position, Rect rect) {
     final points = _activePoints;
     var nearestDistance = double.infinity;
@@ -120,26 +140,29 @@ class _ProfessionalRgbCurvesControlsState
     return nearest;
   }
 
-  int? _insertPoint(_CurvePoint point) {
+  int? _insertPoint(_CurvePoint point, Rect rect) {
     final points = _activePoints;
     final insertAt = points.indexWhere((item) => item.x > point.x);
 
     if (insertAt == 0) {
       final maxX = points.first.x - _xGap;
       if (maxX < 0) return null;
-      points.insert(
-        0,
-        _CurvePoint(point.x.clamp(0.0, maxX).toDouble(), point.y),
+      final raw = _CurvePoint(
+        point.x.clamp(0.0, maxX).toDouble(),
+        point.y,
       );
+      points.insert(0, _constrainStartPoint(raw, rect));
       return 0;
     }
 
     if (insertAt < 0) {
       final minX = points.last.x + _xGap;
       if (minX > 1) return null;
-      points.add(
-        _CurvePoint(point.x.clamp(minX, 1.0).toDouble(), point.y),
+      final raw = _CurvePoint(
+        point.x.clamp(minX, 1.0).toDouble(),
+        point.y,
       );
+      points.add(_constrainEndPoint(raw, rect));
       return points.length - 1;
     }
 
@@ -163,7 +186,7 @@ class _ProfessionalRgbCurvesControlsState
 
     setState(() {
       _activePointer = event.pointer;
-      selected ??= _insertPoint(_offsetToPoint(local, rect));
+      selected ??= _insertPoint(_offsetToPoint(local, rect), rect);
       _selectedIndex = selected;
     });
 
@@ -196,14 +219,32 @@ class _ProfessionalRgbCurvesControlsState
     if (index < 0 || index >= points.length) return;
     final incoming = _offsetToPoint(position, rect);
 
-    final minX = index == 0 ? 0.0 : points[index - 1].x + _xGap;
-    final maxX = index == points.length - 1
-        ? 1.0
-        : points[index + 1].x - _xGap;
-    final x = incoming.x.clamp(minX, maxX).toDouble();
+    late final _CurvePoint next;
+    if (index == 0) {
+      final maxX = points.length > 1 ? points[1].x - _xGap : 1.0;
+      final raw = _CurvePoint(
+        incoming.x.clamp(0.0, maxX).toDouble(),
+        incoming.y,
+      );
+      next = _constrainStartPoint(raw, rect);
+    } else if (index == points.length - 1) {
+      final minX = points[index - 1].x + _xGap;
+      final raw = _CurvePoint(
+        incoming.x.clamp(minX, 1.0).toDouble(),
+        incoming.y,
+      );
+      next = _constrainEndPoint(raw, rect);
+    } else {
+      final minX = points[index - 1].x + _xGap;
+      final maxX = points[index + 1].x - _xGap;
+      next = _CurvePoint(
+        incoming.x.clamp(minX, maxX).toDouble(),
+        incoming.y,
+      );
+    }
 
     setState(() {
-      points[index] = _CurvePoint(x, incoming.y);
+      points[index] = next;
     });
     if (scheduleDispatch) _scheduleDispatch();
   }
@@ -266,6 +307,8 @@ class _ProfessionalRgbCurvesControlsState
 
     setState(() {
       points.removeAt(index);
+      points[0] = _constrainStartPoint(points.first);
+      points[points.length - 1] = _constrainEndPoint(points.last);
       _selectedIndex = null;
       _activePointer = null;
     });
@@ -392,7 +435,7 @@ class _ProfessionalRgbCurvesControlsState
                 Expanded(
                   child: Text(
                     selectedPoint == null
-                        ? 'Tap empty graph to add · drag every point in X/Y'
+                        ? 'Start: left/bottom · End: right/top · middle: free X/Y'
                         : 'Input ${(selectedPoint.x * 100).round()}  ·  Output ${(selectedPoint.y * 100).round()}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
