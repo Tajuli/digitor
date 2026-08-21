@@ -215,6 +215,24 @@ class _ProfessionalRgbCurvesControlsState
     _dispatchTimer = Timer(const Duration(milliseconds: 24), _flushDispatch);
   }
 
+  List<Map<String, double>> _enginePoints() {
+    final visible = _activePoints;
+    final output = <Map<String, double>>[];
+    final first = visible.first;
+    final last = visible.last;
+
+    if (first.x > 0) {
+      output.add(<String, double>{'x': 0, 'y': first.y});
+    }
+    for (final point in visible) {
+      output.add(<String, double>{'x': point.x, 'y': point.y});
+    }
+    if (last.x < 1) {
+      output.add(<String, double>{'x': 1, 'y': last.y});
+    }
+    return output;
+  }
+
   void _flushDispatch() {
     _dispatchTimer?.cancel();
     _dispatchTimer = null;
@@ -222,10 +240,7 @@ class _ProfessionalRgbCurvesControlsState
     _dispatchPending = false;
     final payload = <String, Object?>{
       'channel': _channel,
-      'points': <Map<String, double>>[
-        for (final point in _activePoints)
-          <String, double>{'x': point.x, 'y': point.y},
-      ],
+      'points': _enginePoints(),
     };
     unawaited(widget.dispatch('color.rgbCurves', 'points', payload));
   }
