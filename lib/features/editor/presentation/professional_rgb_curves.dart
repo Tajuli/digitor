@@ -79,8 +79,12 @@ class _ProfessionalRgbCurvesControlsState
   }
 
   Rect _graphRect(Size size) {
-    final width = (size.width - (_edgePadding * 2)).clamp(1.0, double.infinity);
-    final height = (size.height - (_edgePadding * 2)).clamp(1.0, double.infinity);
+    final width = (size.width - (_edgePadding * 2))
+        .clamp(1.0, double.infinity)
+        .toDouble();
+    final height = (size.height - (_edgePadding * 2))
+        .clamp(1.0, double.infinity)
+        .toDouble();
     return Rect.fromLTWH(_edgePadding, _edgePadding, width, height);
   }
 
@@ -412,8 +416,12 @@ class _RgbCurvePainter extends CustomPainter {
   final double edgePadding;
 
   Rect _rect(Size size) {
-    final width = (size.width - edgePadding * 2).clamp(1.0, double.infinity);
-    final height = (size.height - edgePadding * 2).clamp(1.0, double.infinity);
+    final width = (size.width - edgePadding * 2)
+        .clamp(1.0, double.infinity)
+        .toDouble();
+    final height = (size.height - edgePadding * 2)
+        .clamp(1.0, double.infinity)
+        .toDouble();
     return Rect.fromLTWH(edgePadding, edgePadding, width, height);
   }
 
@@ -425,7 +433,10 @@ class _RgbCurvePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = _rect(size);
-    canvas.drawRect(rect.inflate(edgePadding), Paint()..color = const Color(0xFF0A0A0E));
+    canvas.drawRect(
+      rect.inflate(edgePadding),
+      Paint()..color = const Color(0xFF0A0A0E),
+    );
 
     final gridPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.09)
