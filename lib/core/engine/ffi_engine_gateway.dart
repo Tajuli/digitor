@@ -972,7 +972,7 @@ final class DigitorFfiEngineGateway implements EngineGateway {
 
       var nativeExportCompleted = false;
       try {
-        await _w.exportMedia(
+        _w.exportMedia(
           path: outputPath,
           firstFrame: firstFrame,
           lastFrame: lastFrame,
