@@ -12,12 +12,14 @@ class MobileMultitrackTimeline extends StatefulWidget {
     required this.onImport,
     required this.onEdit,
     required this.onSeekUs,
+    required this.onTimelineChanged,
   });
 
   final EngineSnapshot snapshot;
   final VoidCallback onImport;
   final VoidCallback onEdit;
   final ValueChanged<int> onSeekUs;
+  final ValueChanged<Map<String, Object?>> onTimelineChanged;
 
   @override
   State<MobileMultitrackTimeline> createState() =>
@@ -79,11 +81,17 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
   int _audioTrackCount = 1;
   int _clipSerial = 0;
   int _localPositionUs = 0;
-  String? _selectedClipId;
+  int _lastObservedImportSerial = -1;
   String? _lastObservedMediaPath;
+  String? _selectedClipId;
   String? _timelineError;
 
   String? get _mediaPath => widget.snapshot.state['mediaPath']?.toString();
+
+  int get _mediaImportSerial {
+    final value = widget.snapshot.state['mediaImportSerial'];
+    return value is num ? value.toInt() : 0;
+  }
 
   int get _timelineDurationUs {
     var result = 0;
@@ -145,17 +153,17 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
     super.didUpdateWidget(oldWidget);
     final oldPath = oldWidget.snapshot.state['mediaPath']?.toString();
     final newPath = widget.snapshot.state['mediaPath']?.toString();
-    if (oldPath != newPath || (_clips.isEmpty && newPath != null)) {
+    final oldSerial = oldWidget.snapshot.state['mediaImportSerial'];
+    final newSerial = widget.snapshot.state['mediaImportSerial'];
+    if (oldSerial != newSerial ||
+        oldPath != newPath ||
+        (_clips.isEmpty && newPath != null)) {
       _syncImportedMedia();
     }
-    if (_clips.length <= 1) {
-      final value = widget.snapshot.position.inMicroseconds;
-      final limit = _timelineDurationUs;
-      _localPositionUs = value < 0
-          ? 0
-          : value > limit
-              ? limit
-              : value;
+
+    final statusPosition = widget.snapshot.position.inMicroseconds;
+    if (statusPosition >= 0 && statusPosition <= _timelineDurationUs) {
+      _localPositionUs = statusPosition;
     }
   }
 
@@ -163,11 +171,15 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
     final timeline = _timeline;
     final path = _mediaPath;
     final durationUs = widget.snapshot.duration.inMicroseconds;
+    final importSerial = _mediaImportSerial;
+    final alreadyObserved = importSerial > 0
+        ? importSerial == _lastObservedImportSerial
+        : path == _lastObservedMediaPath;
     if (timeline == null ||
         path == null ||
         path.isEmpty ||
         durationUs <= 0 ||
-        path == _lastObservedMediaPath) {
+        alreadyObserved) {
       return;
     }
 
@@ -215,10 +227,46 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
             sourceGroupId: sourceGroup,
           ),
         );
+        _lastObservedImportSerial = importSerial;
         _lastObservedMediaPath = path;
         _selectedClipId = clipId;
         _localPositionUs = startUs;
         _timelineError = null;
+      });
+      _publishTimeline();
+      widget.onSeekUs(startUs);
+    } catch (error) {
+      if (mounted) setState(() => _timelineError = '$error');
+    }
+  }
+
+  void _publishTimeline() {
+    final timeline = _timeline;
+    if (timeline == null || _clips.isEmpty) return;
+    try {
+      final info = timeline.info;
+      if (!info.valid || info.durationUs <= 0) {
+        throw StateError('Native project timeline is invalid.');
+      }
+      final sources = <String, String>{};
+      for (final clip in _clips) {
+        sources[clip.sourceGroupId] = clip.path;
+      }
+      widget.onTimelineChanged(<String, Object?>{
+        'serializedProject': timeline.serialize(),
+        'revision': info.revision,
+        'durationUs': info.durationUs,
+        'videoTrackCount': info.videoTrackCount,
+        'audioTrackCount': info.audioTrackCount,
+        'fpsNum': 30,
+        'fpsDen': 1,
+        'sources': <Map<String, Object?>>[
+          for (final entry in sources.entries)
+            <String, Object?>{
+              'sourceMediaGroupId': entry.key,
+              'path': entry.value,
+            },
+        ],
       });
     } catch (error) {
       if (mounted) setState(() => _timelineError = '$error');
@@ -259,6 +307,7 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
           setState(() => _audioTrackCount = next);
           break;
       }
+      _publishTimeline();
     } catch (error) {
       setState(() => _timelineError = '$error');
     }
@@ -298,6 +347,7 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
         _selectedClipId = secondId;
         _timelineError = null;
       });
+      _publishTimeline();
     } catch (error) {
       setState(() => _timelineError = '$error');
     }
@@ -319,6 +369,8 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
         if (_localPositionUs > durationUs) _localPositionUs = durationUs;
         _timelineError = null;
       });
+      if (_clips.isNotEmpty) _publishTimeline();
+      widget.onSeekUs(_localPositionUs);
     } catch (error) {
       setState(() => _timelineError = '$error');
     }
@@ -331,15 +383,10 @@ class _MobileMultitrackTimelineState extends State<MobileMultitrackTimeline> {
     final globalUs = (durationUs * fraction).round();
     setState(() => _localPositionUs = globalUs);
 
-    // The preview/export host stays native. Do not introduce a Flutter pixel
-    // renderer while the production source registry is being wired to the full
-    // project timeline.
-    final selected = _selectedClip;
-    if (selected != null &&
-        globalUs >= selected.startUs &&
-        globalUs <= selected.endUs) {
-      widget.onSeekUs(selected.sourceStartUs + globalUs - selected.startUs);
-    }
+    // Project timeline time is authoritative. Native production resolves the
+    // active clip and converts this to source-local time; Flutter never seeks a
+    // decoder directly and never performs pixel processing.
+    widget.onSeekUs(globalUs);
   }
 
   List<_TimelineClipView> _clipsForTrack(String label) {
@@ -537,9 +584,21 @@ class _TimelineToolbar extends StatelessWidget {
       child: Row(
         children: <Widget>[
           const SizedBox(width: 4),
-          _ToolbarButton(icon: Icons.video_call_outlined, label: 'Add', onTap: onImport),
-          _ToolbarButton(icon: Icons.content_cut, label: 'Split', onTap: onSplit),
-          _ToolbarButton(icon: Icons.delete_outline, label: 'Delete', onTap: onDelete),
+          _ToolbarButton(
+            icon: Icons.video_call_outlined,
+            label: 'Add',
+            onTap: onImport,
+          ),
+          _ToolbarButton(
+            icon: Icons.content_cut,
+            label: 'Split',
+            onTap: onSplit,
+          ),
+          _ToolbarButton(
+            icon: Icons.delete_outline,
+            label: 'Delete',
+            onTap: onDelete,
+          ),
           PopupMenuButton<_TrackKind>(
             tooltip: 'Add track',
             enabled: canAddVideo || canAddAudio,
@@ -692,7 +751,10 @@ class _TimelineLane extends StatelessWidget {
   Widget _buildClip(_TimelineClipView clip) {
     final safeDuration = math.max(1, durationUs);
     final left = clip.startUs / safeDuration * contentWidth;
-    final width = math.max(14.0, clip.durationUs / safeDuration * contentWidth - 2);
+    final width = math.max(
+      14.0,
+      clip.durationUs / safeDuration * contentWidth - 2,
+    );
     final selected = selectedClipId == clip.id;
     return Positioned(
       left: left + 1,
@@ -705,7 +767,9 @@ class _TimelineLane extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 5),
           alignment: Alignment.centerLeft,
           decoration: BoxDecoration(
-            color: audioLane ? const Color(0xFF28573D) : const Color(0xFF2D4772),
+            color: audioLane
+                ? const Color(0xFF28573D)
+                : const Color(0xFF2D4772),
             borderRadius: BorderRadius.circular(4),
             border: Border.all(
               color: selected && !audioLane
